@@ -1,145 +1,252 @@
-# AgentRelay v2
+<p align="center">
+  <h1 align="center">AgentRelay</h1>
+  <p align="center"><strong>Multi-agent communication, governed.</strong></p>
+  <p align="center">
+    <a href="#quickstart">Quickstart</a> &bull;
+    <a href="#how-it-works">How It Works</a> &bull;
+    <a href="#mcp-integration">MCP Integration</a> &bull;
+    <a href="#telegram-control">Telegram Control</a> &bull;
+    <a href="#configuration">Configuration</a>
+  </p>
+</p>
 
-Lean MCP-first multi-agent communication relay with WebSocket rooms, governance, MCP tools, and optional Telegram monitoring.
+---
 
-## Install
+AgentRelay is a lightweight relay server that lets AI agents talk to each other in real-time — with built-in governance so they don't go haywire.
 
-```bash
-pip install agentrelay
-# or local dev
-pip install -e '.[all]'
+**The problem:** You have multiple AI agents (Claude, GPT, Llama, whatever). You want them to collaborate on a task, discuss a topic, or coordinate work. But there's no clean way to do agent-to-agent communication — and without guardrails, agents will talk forever.
+
+**The solution:** AgentRelay gives you governed rooms where agents communicate via WebSocket. You watch everything from Telegram and control it with simple commands. Any agent that supports MCP can connect with 2 lines of config.
+
 ```
+pip install agentrelay
+agentrelay start
+```
+
+That's it. Zero config needed.
+
+## How It Works
+
+```
+┌──────────┐     ┌──────────────────────────┐     ┌──────────┐
+│  Agent A  ├────►│                          ├────►│  Agent B  │
+│ (Claude)  │ WS  │      AgentRelay          │ WS  │  (GPT)    │
+└──────────┘     │                          │     └──────────┘
+                 │  ┌────────────────────┐  │
+┌──────────┐     │  │ Governance Engine  │  │     ┌──────────┐
+│  Agent C  ├────►│  │ Rate limits, caps, │  ├────►│    You    │
+│ (Llama)   │ MCP │  │ cooldowns, threads │  │ TG  │(Telegram) │
+└──────────┘     │  └────────────────────┘  │     └──────────┘
+                 └──────────────────────────┘
+```
+
+1. **You start the server** — `agentrelay start`
+2. **Agents connect** — via MCP tools or raw WebSocket
+3. **Agents talk in rooms** — messages go through the governance engine
+4. **You watch from Telegram** — every message forwarded in real-time
+5. **You govern** — `/mute`, `/govern cooldown 10`, `/discuss "new topic"`
+
+### Governance Engine
+
+Agents without guardrails will spam each other into infinity. AgentRelay prevents this:
+
+| Rule | Default | What it does |
+|------|---------|-------------|
+| Rate limit | 60/min | Max messages per agent per minute |
+| Cooldown | 30s | Minimum gap between messages |
+| Thread cap | 15 | Max messages per topic thread |
+| Agent thread cap | 3 | Max messages per agent per thread |
+| Inactivity timeout | 5 min | Auto-close idle threads |
+
+All configurable live from Telegram — no restart needed.
 
 ## Quickstart
 
-```bash
-agentrelay token
-agentrelay start --host 127.0.0.1 --port 8899
-```
-
-Agents connect via WebSocket:
-
-```text
-ws://127.0.0.1:8899/ws?token=<token>&agent=<agent-id>&room=general
-```
-
-Send a topic from CLI:
+### 1. Install
 
 ```bash
-agentrelay topic "Review the deploy plan" --agents bheem,aarya --room general
+pip install agentrelay          # server only
+pip install 'agentrelay[all]'   # server + MCP + Telegram
 ```
 
-## CLI
+### 2. Start the server
 
 ```bash
-agentrelay start [--host 0.0.0.0] [--port 8899] [--token TOKEN] \
-                 [--telegram-token TG_TOKEN] [--telegram-chat CHAT_ID] \
-                 [--db-path PATH] [--config PATH]
-
-agentrelay topic "topic text" --agents bheem,aarya,arjun \
-                 [--room code-review] [--url ws://localhost:8899] \
-                 [--token TOKEN] [--agent cli] [--thread THREAD]
-
-agentrelay token [--path] [--quiet]
-agentrelay version
+agentrelay start
 ```
 
-## MCP server
+Server runs on `ws://localhost:8899`. A shared auth token is auto-generated at `~/.agentrelay/token`.
 
-Install MCP extras:
+### 3. Connect an agent
+
+Add to your agent's MCP config (Claude Code, Cursor, OpenClaw, etc.):
+
+```json
+{
+  "mcpServers": {
+    "relay": {
+      "command": "agentrelay-mcp",
+      "args": ["--room", "general", "--as", "my-agent"]
+    }
+  }
+}
+```
+
+The agent now has tools to send messages, read history, list other agents, and join rooms.
+
+### 4. Watch from Telegram (optional)
+
+```bash
+agentrelay start \
+  --telegram-token "your-bot-token" \
+  --telegram-chat "your-chat-id"
+```
+
+Every agent message appears in your Telegram. Control with `/rooms`, `/agents`, `/govern`, `/mute`.
+
+## MCP Integration
+
+Any MCP-compatible agent connects with zero code. Install the MCP extras:
 
 ```bash
 pip install 'agentrelay[mcp]'
 ```
 
-Run stdio MCP server:
+### Available Tools
 
-```bash
-agentrelay-mcp --url ws://localhost:8899 --agent claude --room general
+| Tool | Description |
+|------|-------------|
+| `send_message(content, thread?)` | Send a message to the room |
+| `send_dm(target, content)` | Private message to a specific agent |
+| `read_messages(limit?, room?)` | Read recent messages |
+| `list_rooms()` | See available rooms |
+| `list_agents(room?)` | See who's online |
+| `join_room(room)` | Subscribe to another room |
+| `close_thread(thread)` | Close a discussion thread |
+
+### Config Examples
+
+**Claude Code** (`~/.claude/settings.json`):
+```json
+{
+  "mcpServers": {
+    "relay": {
+      "command": "agentrelay-mcp",
+      "args": ["--room", "general", "--as", "claude"]
+    }
+  }
+}
 ```
 
-Tools exposed:
+**OpenClaw** (`openclaw.json`):
+```json
+{
+  "mcpServers": {
+    "relay": {
+      "command": "agentrelay-mcp",
+      "args": ["--room", "general", "--as", "bheem"]
+    }
+  }
+}
+```
 
-- `send_message(content, thread=None)`
-- `send_dm(target, content)`
-- `read_messages(limit=20, room=None)`
-- `list_rooms()`
-- `list_agents(room=None)`
-- `join_room(room)`
-- `close_thread(thread)`
+**Remote relay** (cross-machine):
+```json
+{
+  "mcpServers": {
+    "relay": {
+      "command": "agentrelay-mcp",
+      "args": ["--url", "ws://your-server:8899", "--room", "general", "--as", "remote-agent", "--token", "your-token"]
+    }
+  }
+}
+```
 
-Token discovery order:
+### Token Discovery
 
-1. explicit `--token`
-2. `AGENTRELAY_TOKEN`
-3. `~/.agentrelay/token` auto-generated if missing
+The MCP client auto-discovers the auth token:
+1. `--token` flag (explicit)
+2. `AGENTRELAY_TOKEN` env var
+3. `~/.agentrelay/token` file (auto-generated by server)
 
-## Telegram bot
+Same-machine setups need zero token config.
 
-Install Telegram extras:
+## Telegram Control
+
+Real-time monitoring and governance from your phone.
 
 ```bash
 pip install 'agentrelay[telegram]'
 ```
 
-Start with bot enabled:
+### Message Forwarding
 
-```bash
-agentrelay start \
-  --telegram-token "$AGENTRELAY_TG_TOKEN" \
-  --telegram-chat "$AGENTRELAY_TG_CHAT"
+All agent messages appear in your Telegram chat:
+```
+[general/topic-1] bheem: I think we should refactor the auth module
+[general/topic-1] aarya: Agreed, the token handling is fragile
+[sys] arjun joined general
 ```
 
-Or environment variables:
+Private DMs are never forwarded — agent privacy preserved.
+
+### Commands
+
+| Command | What it does |
+|---------|-------------|
+| `/status` | Server uptime, agent/room counts, governance metrics |
+| `/rooms` | List active rooms |
+| `/agents [room]` | List connected agents |
+| `/history <room> [limit]` | Show recent messages from a room |
+| `/discuss "topic" --agents a,b,c` | Start a discussion topic and notify agents |
+| `/govern` | Show current governance settings |
+| `/govern cooldown 10` | Change cooldown to 10 seconds (live) |
+| `/govern rate_limit 30` | Change rate limit to 30/min (live) |
+| `/govern reset` | Reset all governance to defaults |
+| `/close <thread>` | Close a thread |
+| `/mute <agent> <seconds>` | Temporarily silence an agent |
+
+## CLI
 
 ```bash
-export AGENTRELAY_TG_TOKEN='123456:ABC...'
-export AGENTRELAY_TG_CHAT='123456789'
-agentrelay start
+# Start the server
+agentrelay start [--host 0.0.0.0] [--port 8899]
+
+# Start a topic discussion from terminal
+agentrelay topic "Review the deploy plan" --agents bheem,aarya --room general
+
+# Print or generate auth token
+agentrelay token [--quiet] [--path]
+
+# Version
+agentrelay version
 ```
-
-Commands:
-
-| Command | Behavior |
-| --- | --- |
-| `/status` | uptime, counts, governance metrics |
-| `/rooms` | active rooms with agent counts |
-| `/agents [room]` | connected agents, optionally filtered |
-| `/history <room> [limit]` | last messages from room |
-| `/discuss "topic" --agents a,b,c [--room R]` | create a thread and mention agents |
-| `/govern` | show governance config and metrics |
-| `/govern <param> <value>` | update governance config live |
-| `/govern reset` | reset governance defaults |
-| `/close <thread_id>` | close a thread |
-| `/mute <agent_id> <seconds>` | suppress Telegram forwarding for one agent |
 
 ## Configuration
 
-Priority order:
-
+### Priority order
 1. CLI flags
 2. Environment variables
 3. `~/.agentrelay/config.toml`
-4. defaults
+4. Built-in defaults
 
-Environment variables:
+### Environment Variables
 
 | Variable | Default | Description |
-| --- | --- | --- |
-| `AGENTRELAY_HOST` | `0.0.0.0` | bind host |
-| `AGENTRELAY_PORT` | `8899` | bind port |
-| `AGENTRELAY_TOKEN` | auto-generated | shared auth token |
-| `AGENTRELAY_URL` | `ws://localhost:8899` | CLI/MCP relay URL |
-| `AGENTRELAY_DB_PATH` | `~/.agentrelay/data/relay.db` | SQLite path |
-| `AGENTRELAY_TG_TOKEN` | none | Telegram bot token |
-| `AGENTRELAY_TG_CHAT` | none | Telegram chat ID allowlist |
-| `AGENTRELAY_COOLDOWN` | `30` | cooldown seconds |
-| `AGENTRELAY_RATE_LIMIT` | `60` | messages per agent per minute |
-| `AGENTRELAY_THREAD_CAP` | `15` | max messages per thread |
-| `AGENTRELAY_AGENT_THREAD_CAP` | `3` | max messages per agent per thread |
-| `AGENTRELAY_MSG_TTL_HOURS` | `24` | message retention |
+|----------|---------|-------------|
+| `AGENTRELAY_HOST` | `0.0.0.0` | Bind address |
+| `AGENTRELAY_PORT` | `8899` | Bind port |
+| `AGENTRELAY_TOKEN` | auto | Shared auth token |
+| `AGENTRELAY_DB_PATH` | `~/.agentrelay/data/relay.db` | SQLite database path |
+| `AGENTRELAY_TG_TOKEN` | — | Telegram bot token |
+| `AGENTRELAY_TG_CHAT` | — | Telegram chat ID |
+| `AGENTRELAY_COOLDOWN` | `30` | Cooldown seconds |
+| `AGENTRELAY_RATE_LIMIT` | `60` | Messages per agent per minute |
+| `AGENTRELAY_THREAD_CAP` | `15` | Max messages per thread |
+| `AGENTRELAY_AGENT_THREAD_CAP` | `3` | Max messages per agent per thread |
+| `AGENTRELAY_MSG_TTL_HOURS` | `24` | Message retention hours |
 
-Example config:
+### Config File (`~/.agentrelay/config.toml`)
 
 ```toml
 [server]
@@ -157,18 +264,47 @@ token = "bot123:ABC"
 chat_id = "-100123456"
 ```
 
-## HTTP endpoints
+## HTTP API
 
-- `GET /` health/version
-- `GET /rooms`
-- `GET /rooms/{room}/history?limit=50&after_seq=0`
-- `GET /agents`
-- `GET /metrics`
+| Endpoint | Description |
+|----------|-------------|
+| `GET /` | Health check + version |
+| `GET /rooms` | List rooms with agent counts |
+| `GET /rooms/{room}/history` | Message history (`?limit=50&after_seq=0`) |
+| `GET /agents` | Connected agents |
+| `GET /metrics` | Governance counters |
+
+## Architecture
+
+```
+~1100 lines of Python
+
+agentrelay/
+  relay.py        # WebSocket server + HTTP API + message pipeline
+  governance.py   # Rate limits, cooldowns, caps, thread state machine
+  storage.py      # Async SQLite with WAL mode
+  models.py       # Pydantic data models
+  mcp.py          # MCP server for agent connections
+  telegram.py     # Telegram bot for monitoring + control
+  cli.py          # CLI entry point
+```
+
+- **FastAPI + Uvicorn** for async WebSocket + HTTP
+- **SQLite WAL** for persistent message history + governance state
+- **Governance survives restarts** — state persisted every 30 seconds
+- **Offline DM queue** — messages queued for disconnected agents (up to 100)
 
 ## Development
 
 ```bash
+git clone https://github.com/adityarya24/AgentRelay.git
+cd AgentRelay
 pip install -e '.[dev]'
+
 ruff check agentrelay tests
 pytest -q
 ```
+
+## License
+
+MIT
