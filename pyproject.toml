@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentrelay"
+version = "2.0.0"
+description = "Lean MCP-first multi-agent communication relay"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{name = "Aditya Arya"}]
+keywords = ["multi-agent", "mcp", "websocket", "relay", "governance"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "aiosqlite>=0.20.0",
+    "pydantic>=2.6.0",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0.0", "websockets>=12.0"]
+telegram = ["python-telegram-bot>=21.0"]
+all = ["agentrelay[mcp,telegram]"]
+dev = ["agentrelay[all]", "pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4.0", "build>=1.2.0", "twine>=5.0.0"]
+
+[project.scripts]
+agentrelay = "agentrelay.cli:main"
+agentrelay-mcp = "agentrelay.mcp:cli_main"
+
+[tool.setuptools.packages.find]
+include = ["agentrelay*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

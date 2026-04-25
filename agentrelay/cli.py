@@ -1,0 +1,165 @@
+"""AgentRelay command line interface."""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import logging
+import os
+import sys
+from pathlib import Path
+from urllib.parse import quote
+
+import uvicorn
+
+from . import __version__
+from .relay import create_app, default_db_path, ensure_token
+
+DEFAULT_URL = "ws://localhost:8899"
+
+
+def _load_toml(path: str | None) -> dict:
+    if not path:
+        path = str(Path.home() / ".agentrelay" / "config.toml")
+    p = Path(path).expanduser()
+    if not p.exists():
+        return {}
+    import tomllib
+
+    return tomllib.loads(p.read_text())
+
+
+def _config_value(cli_value, env_key: str, config: dict, section: str, key: str, default):
+    if cli_value is not None:
+        return cli_value
+    if os.getenv(env_key) is not None:
+        return os.getenv(env_key)
+    return config.get(section, {}).get(key, default)
+
+
+def cmd_start(args: argparse.Namespace) -> None:
+    cfg = _load_toml(args.config)
+    host = str(_config_value(args.host, "AGENTRELAY_HOST", cfg, "server", "host", "0.0.0.0"))
+    port = int(_config_value(args.port, "AGENTRELAY_PORT", cfg, "server", "port", 8899))
+    token = ensure_token(args.token)
+    os.environ.setdefault("AGENTRELAY_TOKEN", token)
+    if args.telegram_token:
+        os.environ["AGENTRELAY_TG_TOKEN"] = args.telegram_token
+    if args.telegram_chat:
+        os.environ["AGENTRELAY_TG_CHAT"] = args.telegram_chat
+    db_path = args.db_path or os.getenv("AGENTRELAY_DB_PATH") or default_db_path()
+    logging.basicConfig(
+        level=getattr(logging, str(cfg.get("logging", {}).get("level", "INFO")).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    print(f"AgentRelay v{__version__} listening on {host}:{port}")
+    print(f"Token: {token}")
+    from .relay import Relay
+
+    app = create_app(Relay(token=token, db_path=db_path))
+    uvicorn.run(app, host=host, port=port)
+
+
+def cmd_token(args: argparse.Namespace) -> None:
+    token = ensure_token(args.token)
+    if args.path:
+        print(str(Path.home() / ".agentrelay" / "token"))
+    elif args.quiet:
+        print(token)
+    else:
+        print(token)
+
+
+def cmd_version(_: argparse.Namespace) -> None:
+    print(__version__)
+
+
+def _normalize_ws_url(url: str) -> str:
+    base = (url or DEFAULT_URL).rstrip("/")
+    if base.startswith("http://"):
+        base = "ws://" + base[len("http://") :]
+    elif base.startswith("https://"):
+        base = "wss://" + base[len("https://") :]
+    return base
+
+
+async def _topic(args: argparse.Namespace) -> None:
+    import websockets
+
+    token = args.token or ensure_token()
+    room = args.room or "general"
+    agent = args.agent or "cli"
+    agents = [a.strip() for a in args.agents.split(",") if a.strip()]
+    if not agents:
+        raise ValueError("--agents must include at least one agent id")
+    thread = args.thread or args.topic[:48]
+    url = (
+        f"{_normalize_ws_url(args.url)}/ws?token={quote(token)}"
+        f"&agent={quote(agent)}&room={quote(room)}"
+    )
+    payload = {"content": args.topic, "thread": thread, "mentions": agents}
+    async with websockets.connect(url, open_timeout=10) as ws:
+        await ws.send(json.dumps(payload))
+        deadline = asyncio.get_running_loop().time() + args.timeout
+        last = None
+        while asyncio.get_running_loop().time() < deadline:
+            raw = await asyncio.wait_for(ws.recv(), timeout=max(0.1, deadline - asyncio.get_running_loop().time()))
+            msg = json.loads(raw)
+            last = msg
+            if msg.get("content") == "ack" or msg.get("error"):
+                print(json.dumps(msg, ensure_ascii=False))
+                return
+        print(json.dumps(last or {"status": "sent", "thread": thread}, ensure_ascii=False))
+
+
+def cmd_topic(args: argparse.Namespace) -> None:
+    try:
+        asyncio.run(_topic(args))
+    except Exception as exc:
+        print(f"agentrelay topic failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="agentrelay")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    start = sub.add_parser("start", help="start relay server")
+    start.add_argument("--host")
+    start.add_argument("--port", type=int)
+    start.add_argument("--token")
+    start.add_argument("--telegram-token")
+    start.add_argument("--telegram-chat")
+    start.add_argument("--db-path")
+    start.add_argument("--config")
+    start.set_defaults(func=cmd_start)
+
+    topic = sub.add_parser("topic", help="create a discussion topic")
+    topic.add_argument("topic")
+    topic.add_argument("--agents", required=True)
+    topic.add_argument("--room", default="general")
+    topic.add_argument("--url", default=os.getenv("AGENTRELAY_URL", DEFAULT_URL))
+    topic.add_argument("--token")
+    topic.add_argument("--agent", default="cli")
+    topic.add_argument("--thread")
+    topic.add_argument("--timeout", type=float, default=10.0)
+    topic.set_defaults(func=cmd_topic)
+
+    token = sub.add_parser("token", help="print current token, generating one if missing")
+    token.add_argument("--token", help="print this explicit token instead of discovering one")
+    token.add_argument("--path", action="store_true", help="print token file path")
+    token.add_argument("--quiet", action="store_true", help="print token only")
+    token.set_defaults(func=cmd_token)
+
+    version = sub.add_parser("version", help="print version")
+    version.set_defaults(func=cmd_version)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
