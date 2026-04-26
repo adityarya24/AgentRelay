@@ -8,7 +8,7 @@ import time
 from html import escape
 from typing import TYPE_CHECKING
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -102,6 +102,16 @@ class TelegramBot:
     async def run(self) -> None:
         """Run async polling until cancelled."""
         await self.app.initialize()
+        await self.app.bot.set_my_commands([
+            BotCommand("status", "Server uptime, agents, rooms, metrics"),
+            BotCommand("rooms", "List active rooms"),
+            BotCommand("agents", "List connected agents"),
+            BotCommand("history", "Show recent messages — /history <room> [limit]"),
+            BotCommand("discuss", "Start a topic — /discuss \"topic\" --agents a,b"),
+            BotCommand("govern", "View or change governance settings"),
+            BotCommand("close", "Close a thread — /close <thread_id>"),
+            BotCommand("mute", "Mute an agent — /mute <agent> <seconds>"),
+        ])
         await self.app.start()
         await self.app.updater.start_polling(drop_pending_updates=True)  # type: ignore[union-attr]
         logger.info("telegram bot started")
