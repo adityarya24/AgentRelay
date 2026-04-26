@@ -1,4 +1,29 @@
-"""MCP stdio/SSE server for AgentRelay v2."""
+"""MCP stdio/SSE server for AgentRelay v2 — multi-agent identity support.
+
+Each MCP tool accepts an optional ``sender`` / ``from_agent`` parameter so
+multiple OpenClaw agents sharing one MCP server can each use their own
+identity.  The server keeps a pool of :class:`RelayClient` instances keyed
+by ``(agent, room)`` and reuses them across calls.
+
+If no per-call identity is given, the server falls back to the default
+agent name configured via ``--agent``, ``AGENTRELAY_AGENT``, or the
+hard-coded ``"mcp"`` default.
+
+OpenClaw agents configure their identity by adding connection params to
+the MCP server config, e.g.:
+
+.. code-block:: json
+
+    {
+      "mcpServers": {
+        "agentrelay": {
+          "command": "agentrelay-mcp",
+          "args": ["--agent", "bheem", "--room", "team"],
+          "env": {"AGENTRELAY_URL": "ws://localhost:8899"}
+        }
+    }
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -37,9 +62,9 @@ def discover_token(token: str | None = None) -> str:
 def _relay_url(url: str | None = None) -> str:
     base = url or os.getenv("AGENTRELAY_URL") or DEFAULT_RELAY_URL
     if base.startswith("http://"):
-        base = "ws://" + base[len("http://") :]
+        base = "ws://" + base[len("http://"):]
     elif base.startswith("https://"):
-        base = "wss://" + base[len("https://") :]
+        base = "wss://" + base[len("https://"):]
     return base.rstrip("/")
 
 
@@ -139,6 +164,53 @@ class RelayClient:
         return await self.send({"type": "close", "thread": thread}, room=room)
 
 
+class ClientPool:
+    """Pool of RelayClient instances keyed by ``(agent, room)``.
+
+    Each unique (agent, room) pair gets its own persistent WebSocket so
+    messages are sent with the correct sender identity.  The pool is lazy —
+    clients are created on first use.
+    """
+
+    def __init__(
+        self,
+        *,
+        relay_url: str,
+        token: str,
+        default_agent: str,
+        default_room: str,
+        connect_timeout: float,
+        response_timeout: float,
+    ):
+        self.relay_url = relay_url
+        self.token = token
+        self.default_agent = default_agent
+        self.default_room = default_room
+        self.connect_timeout = connect_timeout
+        self.response_timeout = response_timeout
+        self._clients: dict[tuple[str, str], RelayClient] = {}
+
+    def get(self, agent: str | None = None, room: str | None = None) -> RelayClient:
+        a = agent or self.default_agent
+        r = room or self.default_room
+        key = (a, r)
+        if key not in self._clients:
+            self._clients[key] = RelayClient(
+                relay_url=self.relay_url,
+                token=self.token,
+                agent=a,
+                room=r,
+                connect_timeout=self.connect_timeout,
+                response_timeout=self.response_timeout,
+            )
+        return self._clients[key]
+
+    async def close_all(self) -> None:
+        for client in self._clients.values():
+            await client.close()
+        self._clients.clear()
+
+
 async def _get_json(url: str) -> Any:
     from urllib.request import urlopen
 
@@ -158,29 +230,65 @@ def create_mcp_server(
     agent: str | None = None,
     room: str | None = None,
 ) -> FastMCP:
+    """Build the MCP server with per-call identity support.
+
+    Every tool that sends a message accepts an optional ``from_agent``
+    parameter.  When provided, the pool creates (or reuses) a dedicated
+    RelayClient that connects under that agent name, so the relay server
+    records the correct sender identity.
+    """
     resolved_url = _relay_url(relay_url)
     resolved_token = discover_token(token)
     resolved_agent = agent or os.getenv("AGENTRELAY_AGENT", "mcp")
     default_room = room or os.getenv("AGENTRELAY_ROOM", "general")
-    client = RelayClient(
+
+    pool = ClientPool(
         relay_url=resolved_url,
         token=resolved_token,
-        agent=resolved_agent,
-        room=default_room,
+        default_agent=resolved_agent,
+        default_room=default_room,
         connect_timeout=float(os.getenv("AGENTRELAY_MCP_CONNECT_TIMEOUT", DEFAULT_CONNECT_TIMEOUT)),
         response_timeout=float(os.getenv("AGENTRELAY_MCP_RESPONSE_TIMEOUT", DEFAULT_RESPONSE_TIMEOUT)),
     )
     mcp = FastMCP("agentrelay")
 
     @mcp.tool()
-    async def send_message(content: str, thread: str | None = None) -> str:
-        """Send a message to the default AgentRelay room."""
-        result = await client.send({"content": content, "thread": thread})
+    async def send_message(
+        content: str,
+        thread: str | None = None,
+        from_agent: str | None = None,
+        room: str | None = None,
+    ) -> str:
+        """Send a message to an AgentRelay room.
+
+        Args:
+            content: The message text.
+            thread: Optional thread / topic ID.
+            from_agent: Override the sender identity (e.g. ``"bheem"``).
+                When omitted, the server default is used.
+            room: Override the target room.
+        """
+        client = pool.get(from_agent, room)
+        payload: dict[str, Any] = {"content": content}
+        if thread:
+            payload["thread"] = thread
+        result = await client.send(payload, room=room)
         return _json(result)
 
     @mcp.tool()
-    async def send_dm(target: str, content: str) -> str:
-        """Send a direct message to one agent, queueing if they are offline."""
+    async def send_dm(
+        target: str,
+        content: str,
+        from_agent: str | None = None,
+    ) -> str:
+        """Send a direct message to one agent, queueing if they are offline.
+
+        Args:
+            target: Recipient agent name.
+            content: The message text.
+            from_agent: Override the sender identity.
+        """
+        client = pool.get(from_agent)
         result = await client.send({"content": content, "target": target})
         return _json(result)
 
@@ -202,26 +310,52 @@ def create_mcp_server(
         """List connected agents, optionally filtered by room."""
         data = await _get_json(f"{resolved_url}/agents")
         if room:
-            data = [agent for agent in data if room in agent.get("rooms", []) or agent.get("room") == room]
+            data = [a for a in data if room in a.get("rooms", []) or a.get("room") == room]
         return _json(data)
 
     @mcp.tool()
-    async def join_room(room: str) -> str:
-        """Join a room once to announce/validate access."""
+    async def join_room(
+        room: str,
+        from_agent: str | None = None,
+    ) -> str:
+        """Join a room to announce/validate access.
+
+        Args:
+            room: Room name to join.
+            from_agent: Override the agent identity for this join.
+        """
+        client = pool.get(from_agent, room)
         result = await client.join(room)
         return _json(result)
 
     @mcp.tool()
-    async def close_thread(thread: str) -> str:
-        """Close a thread in the default room."""
-        result = await client.close_thread(thread)
+    async def close_thread(
+        thread: str,
+        room: str | None = None,
+        from_agent: str | None = None,
+    ) -> str:
+        """Close a thread.
+
+        Args:
+            thread: Thread / topic ID to close.
+            room: Override the target room.
+            from_agent: Override the sender identity.
+        """
+        client = pool.get(from_agent, room)
+        result = await client.close_thread(thread, room=room)
         return _json(result)
 
     return mcp
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agentrelay-mcp")
+    parser = argparse.ArgumentParser(
+        prog="agentrelay-mcp",
+        description=(
+            "AgentRelay MCP server.  Use --agent to set the default sender "
+            "identity.  Each tool also accepts from_agent for per-call overrides."
+        ),
+    )
     parser.add_argument("--url", default=os.getenv("AGENTRELAY_URL", DEFAULT_RELAY_URL))
     parser.add_argument("--token")
     parser.add_argument("--agent", default=os.getenv("AGENTRELAY_AGENT", "mcp"))

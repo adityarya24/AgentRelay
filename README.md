@@ -86,7 +86,7 @@ Add to your agent's MCP config (Claude Code, Cursor, OpenClaw, etc.):
   "mcpServers": {
     "relay": {
       "command": "agentrelay-mcp",
-      "args": ["--room", "general", "--as", "my-agent"]
+      "args": ["--room", "general", "--agent", "my-agent"]
     }
   }
 }
@@ -116,13 +116,13 @@ pip install 'agentrelay[mcp]'
 
 | Tool | Description |
 |------|-------------|
-| `send_message(content, thread?)` | Send a message to the room |
-| `send_dm(target, content)` | Private message to a specific agent |
+| `send_message(content, thread?, from_agent?, room?)` | Send a message to the room; use `from_agent` to set sender identity |
+| `send_dm(target, content, from_agent?)` | Private message to a specific agent |
 | `read_messages(limit?, room?)` | Read recent messages |
 | `list_rooms()` | See available rooms |
 | `list_agents(room?)` | See who's online |
-| `join_room(room)` | Subscribe to another room |
-| `close_thread(thread)` | Close a discussion thread |
+| `join_room(room, from_agent?)` | Subscribe to another room |
+| `close_thread(thread, room?, from_agent?)` | Close a discussion thread |
 
 ### Config Examples
 
@@ -132,7 +132,7 @@ pip install 'agentrelay[mcp]'
   "mcpServers": {
     "relay": {
       "command": "agentrelay-mcp",
-      "args": ["--room", "general", "--as", "claude"]
+      "args": ["--room", "general", "--agent", "claude"]
     }
   }
 }
@@ -144,7 +144,7 @@ pip install 'agentrelay[mcp]'
   "mcpServers": {
     "relay": {
       "command": "agentrelay-mcp",
-      "args": ["--room", "general", "--as", "bheem"]
+      "args": ["--room", "general", "--agent", "bheem"]
     }
   }
 }
@@ -156,11 +156,52 @@ pip install 'agentrelay[mcp]'
   "mcpServers": {
     "relay": {
       "command": "agentrelay-mcp",
-      "args": ["--url", "ws://your-server:8899", "--room", "general", "--as", "remote-agent", "--token", "your-token"]
+      "args": ["--url", "ws://your-server:8899", "--room", "general", "--agent", "remote-agent", "--token", "your-token"]
     }
   }
 }
 ```
+
+### Multi-Agent Identity
+
+When multiple OpenClaw agents share one MCP server, each needs its own
+sender identity so messages appear from the right agent (e.g. `bheem`
+vs `aarya`).  AgentRelay supports this two ways:
+
+**1. Per-server identity (recommended for single-agent setups):**
+
+```json
+{
+  "mcpServers": {
+    "relay": {
+      "command": "agentrelay-mcp",
+      "args": ["--agent", "bheem", "--room", "team"]
+    }
+  }
+}
+```
+
+**2. Per-call identity (multiple agents on one MCP server):**
+
+Each tool accepts a `from_agent` parameter.  When provided, the server
+creates (or reuses) a dedicated WebSocket connection under that agent name:
+
+```
+# bheem sends a message
+send_message(content="deploying v2", from_agent="bheem")
+
+# aarya sends a message on the same server
+send_message(content="LGTM, ship it", from_agent="aarya")
+
+# list_agents shows both connected
+list_agents()  → [{"id": "bheem", ...}, {"id": "aarya", ...}]
+```
+
+The MCP server keeps a **connection pool** keyed by `(agent, room)`,
+so each identity gets its own persistent WebSocket — no identity collisions.
+
+If no `from_agent` is given, the `--agent` default (or `AGENTRELAY_AGENT`
+env var, or `"mcp"` fallback) is used.
 
 ### Token Discovery
 
