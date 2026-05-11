@@ -276,6 +276,27 @@ class Relay:
             )
         return 0
 
+    async def _send_transport_room(self, room: str, msg: Message) -> int:
+        if self._telegram_transport_client is None:
+            return 0
+        if await self.storage.get_telegram_group(room) is None:
+            return 0
+        result = await TelegramTransport(self.storage, self._telegram_transport_client).send_group(
+            msg.sender,
+            room,
+            msg.content,
+        )
+        if result.get("status") == "sent":
+            self.counters["messages_sent"] += 1
+            return 1
+        if result.get("status") == "blocked":
+            self.counters["messages_rejected"] += 1
+            logger.info(
+                "telegram group message blocked by policy",
+                extra={"sender": msg.sender, "room": room, "error": result.get("error")},
+            )
+        return 0
+
     async def _check_policy_routes(
         self, sender: str, room: str, target: str | None, mentions: list[str], thread: str | None
     ) -> dict | None:
@@ -364,6 +385,8 @@ class Relay:
                 delivered = await self._send_transport_dm(msg.target, msg)
         else:
             delivered = await self._broadcast(room, msg.wire())
+            if not skip_transport_delivery:
+                delivered += await self._send_transport_room(room, msg)
         ack = {"type": "system", "content": "ack", "ref_id": msg.id, "seq": msg.seq}
         await self._send(sender, room, ack)
 

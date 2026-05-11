@@ -72,17 +72,38 @@ class TelegramTransport:
         result = await self.client.send_message(token, f"@{target_bot.username}", content)
         return {"status": "sent", "telegram": result}
 
+    async def send_group(self, source: str, room: str, content: str) -> dict:
+        decision = await PolicyEngine(self.storage).evaluate(source, "*", room)
+        if not decision.allowed:
+            return {"status": "blocked", "error": decision.reason, "rule_id": decision.rule_id}
+
+        source_bot = await self.storage.get_telegram_bot(source)
+        group = await self.storage.get_telegram_group(room)
+        if source_bot is None or not source_bot.enabled:
+            return {"status": "failed", "error": "SOURCE_BOT_NOT_REGISTERED"}
+        if group is None or not group.enabled:
+            return {"status": "failed", "error": "GROUP_NOT_REGISTERED"}
+
+        token = self._resolve_token(source_bot.token_ref)
+        result = await self.client.send_message(token, group.chat_id, content)
+        return {"status": "sent", "telegram": result}
+
     async def normalize_update(self, receiver_identity: str, update: dict) -> Message:
         raw_message = update.get("message") or update.get("edited_message") or {}
         sender = await self._sender_identity(raw_message.get("from") or {})
         chat = raw_message.get("chat") or {}
-        room = TELEGRAM_PRIVATE_ROOM if chat.get("type") == "private" else f"telegram:{chat.get('id')}"
+        chat_id = str(chat.get("id"))
+        registered_group = await self.storage.get_telegram_group_by_chat_id(chat_id)
+        room = TELEGRAM_PRIVATE_ROOM if chat.get("type") == "private" else (
+            registered_group.room if registered_group else f"telegram:{chat_id}"
+        )
+        target = receiver_identity if room == TELEGRAM_PRIVATE_ROOM else None
         return Message(
             sender=sender,
             room=room,
             content=str(raw_message.get("text") or raw_message.get("caption") or ""),
-            type=MessageType.DM,
-            target=receiver_identity,
+            type=MessageType.DM if target else MessageType.TEXT,
+            target=target,
             thread=str(raw_message["message_id"]) if raw_message.get("message_id") is not None else None,
         )
 

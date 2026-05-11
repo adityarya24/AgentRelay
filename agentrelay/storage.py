@@ -15,6 +15,7 @@ from .models import (
     MessageType,
     PolicyRule,
     TelegramBotRegistration,
+    TelegramGroupRegistration,
     ThreadState,
     utc_timestamp,
 )
@@ -86,6 +87,14 @@ class Storage:
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS telegram_groups (
+                room TEXT PRIMARY KEY,
+                chat_id TEXT NOT NULL UNIQUE,
+                title TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_msg_room_seq ON messages(room, seq);
             CREATE INDEX IF NOT EXISTS idx_msg_thread ON messages(thread);
             CREATE INDEX IF NOT EXISTS idx_msg_ts ON messages(ts);
@@ -93,6 +102,7 @@ class Storage:
             CREATE INDEX IF NOT EXISTS idx_identity_transport ON identities(transport);
             CREATE INDEX IF NOT EXISTS idx_policy_route ON policies(source, target, room);
             CREATE INDEX IF NOT EXISTS idx_telegram_bot_username ON telegram_bots(username);
+            CREATE INDEX IF NOT EXISTS idx_telegram_group_chat_id ON telegram_groups(chat_id);
             """
         )
         await self._ensure_thread_schema()
@@ -559,6 +569,84 @@ class Storage:
         sql += " ORDER BY identity_id"
         cursor = await self.db.execute(sql)
         return [self._telegram_bot_from_row(row) for row in await cursor.fetchall()]
+
+    @staticmethod
+    def _telegram_group_from_row(row: tuple) -> TelegramGroupRegistration:
+        return TelegramGroupRegistration(
+            room=row[0],
+            chat_id=row[1],
+            title=row[2],
+            enabled=bool(row[3]),
+            created_at=row[4],
+            updated_at=row[5],
+        )
+
+    async def upsert_telegram_group(
+        self, group: TelegramGroupRegistration
+    ) -> TelegramGroupRegistration:
+        now = utc_timestamp()
+        existing = await self.get_telegram_group(group.room)
+        created_at = existing.created_at if existing else group.created_at
+        saved = group.model_copy(update={"created_at": created_at, "updated_at": now})
+        await self._execute(
+            """
+            INSERT INTO telegram_groups (room, chat_id, title, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(room) DO UPDATE SET
+                chat_id=excluded.chat_id,
+                title=excluded.title,
+                enabled=excluded.enabled,
+                updated_at=excluded.updated_at
+            """,
+            (
+                saved.room,
+                saved.chat_id,
+                saved.title,
+                int(saved.enabled),
+                saved.created_at,
+                saved.updated_at,
+            ),
+        )
+        return saved
+
+    async def get_telegram_group(self, room: str) -> TelegramGroupRegistration | None:
+        cursor = await self.db.execute(
+            """
+            SELECT room, chat_id, title, enabled, created_at, updated_at
+            FROM telegram_groups
+            WHERE room=?
+            """,
+            (room,),
+        )
+        row = await cursor.fetchone()
+        return self._telegram_group_from_row(row) if row else None
+
+    async def get_telegram_group_by_chat_id(
+        self, chat_id: str
+    ) -> TelegramGroupRegistration | None:
+        cursor = await self.db.execute(
+            """
+            SELECT room, chat_id, title, enabled, created_at, updated_at
+            FROM telegram_groups
+            WHERE chat_id=?
+            """,
+            (str(chat_id),),
+        )
+        row = await cursor.fetchone()
+        return self._telegram_group_from_row(row) if row else None
+
+    async def list_telegram_groups(
+        self, include_disabled: bool = False
+    ) -> list[TelegramGroupRegistration]:
+        sql = """
+            SELECT room, chat_id, title, enabled, created_at, updated_at
+            FROM telegram_groups
+        """
+        if not include_disabled:
+            sql += " WHERE enabled=1"
+        sql += " ORDER BY room"
+        cursor = await self.db.execute(sql)
+        return [self._telegram_group_from_row(row) for row in await cursor.fetchall()]
 
     async def store_governance(self, state: dict) -> None:
         await self._execute(

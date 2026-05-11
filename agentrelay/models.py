@@ -135,6 +135,15 @@ class TelegramBotRegistration(BaseModel):
     updated_at: float = Field(default_factory=utc_timestamp)
 
 
+class TelegramGroupRegistration(BaseModel):
+    room: str
+    chat_id: str
+    title: str | None = None
+    enabled: bool = True
+    created_at: float = Field(default_factory=utc_timestamp)
+    updated_at: float = Field(default_factory=utc_timestamp)
+
+
 class GovernanceConfig(BaseModel):
     per_agent_thread_cap: int = 3
     per_thread_cap: int = 15

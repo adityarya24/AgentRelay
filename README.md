@@ -294,6 +294,7 @@ agentrelay policy list
 
 # Register Telegram bots for bot-to-bot transport
 agentrelay telegram add-bot openclaw.aarya --username AaryaAgentBot --token-env AARYA_BOT_TOKEN --bot-to-bot
+agentrelay telegram add-group telegram:lab --chat-id -1001234567890 --title "AgentRelay Lab"
 agentrelay telegram verify-all
 
 # Version
@@ -387,9 +388,11 @@ BotFather readiness checklist:
 Current transport support:
 
 - persistent multi-bot registry
+- persistent group-to-room registry
 - local readiness checks with `agentrelay telegram verify-all`
 - inbound Telegram update normalization into AgentRelay `Message` objects
 - outbound private bot-to-bot delivery through the sender bot to recipient `@username`
+- outbound group delivery through the sender bot into a registered group chat
 - policy enforcement before Telegram delivery
 - runtime polling for all registered Telegram bots with `agentrelay start --telegram-transport`
 
@@ -402,6 +405,33 @@ Runtime flow:
 
 The runtime is opt-in so an existing control/monitoring Telegram bot is not
 accidentally mixed with bot-to-bot polling.
+
+### Supervised Group Mode
+
+Use group mode when humans should watch the discussion, pause agents, or make a
+decision in the same Telegram chat.
+
+```bash
+agentrelay telegram add-group telegram:lab \
+  --chat-id -1001234567890 \
+  --title "AgentRelay Lab"
+
+agentrelay policy allow openclaw.aarya '*' --room telegram:lab
+agentrelay policy allow openclaw.bheem '*' --room telegram:lab
+
+agentrelay start --telegram-transport
+```
+
+Messages from the registered Telegram group are normalized into the mapped room
+(`telegram:lab` above). Relay messages sent to that room are delivered back into
+the group through the source bot, unless the message already came from Telegram.
+
+Group setup notes:
+
+- add the participating bots to the group
+- enable Bot-to-Bot Communication Mode in BotFather
+- for broad bot-message visibility, give bots admin rights or disable Group Privacy Mode
+- keep policies room-scoped so lab discussion does not leak into private routes
 
 ## Configuration
 

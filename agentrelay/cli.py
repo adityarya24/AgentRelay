@@ -19,6 +19,7 @@ from .models import (
     PolicyEffect,
     PolicyRule,
     TelegramBotRegistration,
+    TelegramGroupRegistration,
     TrustLevel,
 )
 from .relay import create_app, default_db_path, ensure_token
@@ -269,6 +270,10 @@ def _telegram_bot_json(bot: TelegramBotRegistration) -> str:
     return json.dumps(bot.model_dump(mode="json"), ensure_ascii=False)
 
 
+def _telegram_group_json(group: TelegramGroupRegistration) -> str:
+    return json.dumps(group.model_dump(mode="json"), ensure_ascii=False)
+
+
 async def _telegram_add_bot(args: argparse.Namespace) -> None:
     storage = await _identity_storage(args)
     try:
@@ -312,6 +317,35 @@ async def _telegram_list_bots(args: argparse.Namespace) -> None:
             status = "enabled" if bot.enabled else "disabled"
             b2b = "bot-to-bot" if bot.bot_to_bot_enabled else "bot-to-bot-missing"
             print(f"{bot.identity_id}\t@{bot.username}\t{bot.token_ref}\t{status}\t{b2b}")
+    finally:
+        await storage.close()
+
+
+async def _telegram_add_group(args: argparse.Namespace) -> None:
+    storage = await _identity_storage(args)
+    try:
+        group = TelegramGroupRegistration(
+            room=args.room,
+            chat_id=str(args.chat_id),
+            title=args.title,
+            enabled=not args.disabled,
+        )
+        saved = await storage.upsert_telegram_group(group)
+        print(_telegram_group_json(saved) if args.json else f"saved {saved.room} -> {saved.chat_id}")
+    finally:
+        await storage.close()
+
+
+async def _telegram_list_groups(args: argparse.Namespace) -> None:
+    storage = await _identity_storage(args)
+    try:
+        groups = await storage.list_telegram_groups(include_disabled=args.all)
+        if args.json:
+            print(json.dumps([group.model_dump(mode="json") for group in groups], ensure_ascii=False))
+            return
+        for group in groups:
+            status = "enabled" if group.enabled else "disabled"
+            print(f"{group.room}\t{group.chat_id}\t{status}\t{group.title or '-'}")
     finally:
         await storage.close()
 
@@ -361,6 +395,10 @@ def cmd_telegram(args: argparse.Namespace) -> None:
             asyncio.run(_telegram_add_bot(args))
         elif args.telegram_cmd == "list-bots":
             asyncio.run(_telegram_list_bots(args))
+        elif args.telegram_cmd == "add-group":
+            asyncio.run(_telegram_add_group(args))
+        elif args.telegram_cmd == "list-groups":
+            asyncio.run(_telegram_list_groups(args))
         elif args.telegram_cmd == "verify-all":
             asyncio.run(_telegram_verify_all(args))
         else:
@@ -542,6 +580,19 @@ def build_parser() -> argparse.ArgumentParser:
     tg_list.add_argument("--all", action="store_true", help="include disabled bots")
     tg_list.add_argument("--json", action="store_true")
     tg_list.set_defaults(func=cmd_telegram)
+
+    tg_group = telegram_sub.add_parser("add-group", help="register a Telegram group as a room")
+    tg_group.add_argument("room")
+    tg_group.add_argument("--chat-id", required=True)
+    tg_group.add_argument("--title")
+    tg_group.add_argument("--disabled", action="store_true")
+    tg_group.add_argument("--json", action="store_true")
+    tg_group.set_defaults(func=cmd_telegram)
+
+    tg_groups = telegram_sub.add_parser("list-groups", help="list registered Telegram groups")
+    tg_groups.add_argument("--all", action="store_true", help="include disabled groups")
+    tg_groups.add_argument("--json", action="store_true")
+    tg_groups.set_defaults(func=cmd_telegram)
 
     tg_verify = telegram_sub.add_parser("verify-all", help="check local Telegram readiness")
     tg_verify.add_argument("--json", action="store_true")
