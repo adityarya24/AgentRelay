@@ -8,17 +8,24 @@ import pytest
 
 from agentrelay.cli import main
 from agentrelay.models import PolicyEffect, PolicyRule, TelegramBotRegistration
+from agentrelay.relay import Relay
 from agentrelay.storage import Storage
-from agentrelay.telegram_transport import TelegramTransport
+from agentrelay.telegram_transport import TelegramBotRunner, TelegramTransport
 
 
 class FakeTelegramClient:
     def __init__(self):
         self.sent: list[tuple[str, str, str]] = []
+        self.updates: list[dict] = []
+        self.update_calls: list[tuple[str, int | None]] = []
 
     async def send_message(self, token: str, chat_id: str, text: str) -> dict:
         self.sent.append((token, chat_id, text))
         return {"ok": True, "result": {"message_id": 42}}
+
+    async def get_updates(self, token: str, offset: int | None = None, timeout: int = 30) -> list[dict]:
+        self.update_calls.append((token, offset))
+        return list(self.updates)
 
 
 def test_telegram_bot_registry_roundtrip_and_cli(capsys):
@@ -161,3 +168,88 @@ async def test_telegram_inbound_update_normalizes_registered_bot_sender():
             assert msg.content == "status?"
         finally:
             await storage.close()
+
+
+@pytest.mark.asyncio
+async def test_telegram_runner_polls_registered_bots_into_relay_without_echo(monkeypatch):
+    with tempfile.TemporaryDirectory() as td:
+        relay = Relay(token="test-token", db_path=str(Path(td) / "relay.db"))
+        client = FakeTelegramClient()
+        client.updates = [
+            {
+                "update_id": 10,
+                "message": {
+                    "message_id": 7,
+                    "text": "status?",
+                    "from": {"is_bot": True, "username": "BheemAgentBot"},
+                    "chat": {"id": 1234, "type": "private"},
+                },
+            }
+        ]
+        await relay.startup()
+        try:
+            await relay.storage.upsert_telegram_bot(
+                TelegramBotRegistration(
+                    identity_id="openclaw.aarya",
+                    username="AaryaAgentBot",
+                    token_ref="env:AARYA_BOT_TOKEN",
+                    bot_to_bot_enabled=True,
+                )
+            )
+            await relay.storage.upsert_telegram_bot(
+                TelegramBotRegistration(
+                    identity_id="openclaw.bheem",
+                    username="BheemAgentBot",
+                    token_ref="env:BHEEM_BOT_TOKEN",
+                    bot_to_bot_enabled=True,
+                )
+            )
+            monkeypatch.setenv("AARYA_BOT_TOKEN", "aarya-token")
+            monkeypatch.setenv("BHEEM_BOT_TOKEN", "bheem-token")
+            await TelegramBotRunner(relay, client).poll_once()
+
+            history = await relay.storage.fetch_history("telegram:private")
+            assert [msg.content for msg in history] == ["status?"]
+            assert history[0].sender == "openclaw.bheem"
+            assert history[0].target == "openclaw.aarya"
+            assert client.update_calls == [("aarya-token", None), ("bheem-token", None)]
+            assert client.sent == []
+        finally:
+            await relay.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_relay_sends_outbound_dm_to_registered_telegram_bot(monkeypatch):
+    with tempfile.TemporaryDirectory() as td:
+        relay = Relay(token="test-token", db_path=str(Path(td) / "relay.db"))
+        client = FakeTelegramClient()
+        relay.set_telegram_transport_client(client)
+        await relay.startup()
+        try:
+            await relay.storage.upsert_telegram_bot(
+                TelegramBotRegistration(
+                    identity_id="openclaw.aarya",
+                    username="AaryaAgentBot",
+                    token_ref="env:AARYA_BOT_TOKEN",
+                    bot_to_bot_enabled=True,
+                )
+            )
+            await relay.storage.upsert_telegram_bot(
+                TelegramBotRegistration(
+                    identity_id="openclaw.bheem",
+                    username="BheemAgentBot",
+                    token_ref="env:BHEEM_BOT_TOKEN",
+                    bot_to_bot_enabled=True,
+                )
+            )
+            monkeypatch.setenv("AARYA_BOT_TOKEN", "aarya-token")
+            result = await relay.process(
+                {"content": "report ready", "target": "openclaw.bheem"},
+                "openclaw.aarya",
+                "general",
+            )
+            assert result["status"] == "sent"
+            assert result["delivered_to"] == 1
+            assert client.sent == [("aarya-token", "@BheemAgentBot", "report ready")]
+        finally:
+            await relay.shutdown()

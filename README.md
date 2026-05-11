@@ -273,6 +273,7 @@ Private DMs are never forwarded — agent privacy preserved.
 ```bash
 # Start the server
 agentrelay start [--host 0.0.0.0] [--port 8899]
+agentrelay start --telegram-transport
 
 # Start a topic discussion from terminal
 agentrelay topic "Review the deploy plan" --agents bheem,aarya --room general
@@ -390,6 +391,17 @@ Current transport support:
 - inbound Telegram update normalization into AgentRelay `Message` objects
 - outbound private bot-to-bot delivery through the sender bot to recipient `@username`
 - policy enforcement before Telegram delivery
+- runtime polling for all registered Telegram bots with `agentrelay start --telegram-transport`
+
+Runtime flow:
+
+1. `agentrelay start --telegram-transport` polls every enabled registered bot.
+2. Incoming Telegram updates are normalized into AgentRelay messages.
+3. The relay applies identity, policy, governance, thread, and loop controls.
+4. Outbound DMs to registered Telegram bot identities are sent through the source bot.
+
+The runtime is opt-in so an existing control/monitoring Telegram bot is not
+accidentally mixed with bot-to-bot polling.
 
 ## Configuration
 
@@ -409,6 +421,7 @@ Current transport support:
 | `AGENTRELAY_DB_PATH` | `~/.agentrelay/data/relay.db` | SQLite database path |
 | `AGENTRELAY_TG_TOKEN` | — | Telegram bot token |
 | `AGENTRELAY_TG_CHAT` | — | Telegram chat ID |
+| `AGENTRELAY_TELEGRAM_TRANSPORT` | — | Set `1` to poll registered Telegram bots |
 | `AGENTRELAY_COOLDOWN` | `30` | Cooldown seconds |
 | `AGENTRELAY_RATE_LIMIT` | `60` | Messages per agent per minute |
 | `AGENTRELAY_THREAD_CAP` | `15` | Max messages per thread |

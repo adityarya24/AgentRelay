@@ -1,19 +1,52 @@
 """Telegram multi-bot transport primitives."""
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 import os
+from contextlib import suppress
 from typing import Protocol
+from urllib import parse, request
 
 from .models import Message, MessageType
 from .policy import PolicyEngine
 from .storage import Storage
 
 TELEGRAM_PRIVATE_ROOM = "telegram:private"
+logger = logging.getLogger("agentrelay.telegram_transport")
 
 
 class TelegramClient(Protocol):
     async def send_message(self, token: str, chat_id: str, text: str) -> dict:
         ...
+
+    async def get_updates(self, token: str, offset: int | None = None, timeout: int = 30) -> list[dict]:
+        ...
+
+
+class TelegramHTTPClient:
+    async def send_message(self, token: str, chat_id: str, text: str) -> dict:
+        return await self._post(token, "sendMessage", {"chat_id": chat_id, "text": text})
+
+    async def get_updates(self, token: str, offset: int | None = None, timeout: int = 30) -> list[dict]:
+        payload: dict[str, object] = {"timeout": timeout}
+        if offset is not None:
+            payload["offset"] = offset
+        response = await self._post(token, "getUpdates", payload)
+        result = response.get("result", [])
+        return result if isinstance(result, list) else []
+
+    async def _post(self, token: str, method: str, payload: dict[str, object]) -> dict:
+        return await asyncio.to_thread(self._post_sync, token, method, payload)
+
+    @staticmethod
+    def _post_sync(token: str, method: str, payload: dict[str, object]) -> dict:
+        url = f"https://api.telegram.org/bot{token}/{method}"
+        data = parse.urlencode(payload).encode("utf-8")
+        req = request.Request(url, data=data, method="POST")
+        with request.urlopen(req, timeout=40) as response:  # noqa: S310 - Telegram API endpoint.
+            return json.loads(response.read().decode("utf-8"))
 
 
 class TelegramTransport:
@@ -72,3 +105,75 @@ class TelegramTransport:
                 return token
             raise RuntimeError(f"missing token env var: {value}")
         raise RuntimeError("unsupported telegram token_ref; use env:VARIABLE")
+
+
+class TelegramBotRunner:
+    def __init__(
+        self,
+        relay,
+        client: TelegramClient | None = None,
+        *,
+        poll_interval: float = 1.0,
+        update_timeout: int = 30,
+    ):
+        self.relay = relay
+        self.storage = relay.storage
+        self.client = client or TelegramHTTPClient()
+        self.poll_interval = poll_interval
+        self.update_timeout = update_timeout
+        self._offsets: dict[str, int] = {}
+
+    async def run(self) -> None:
+        try:
+            while True:
+                await self.poll_once()
+                await asyncio.sleep(self.poll_interval)
+        except asyncio.CancelledError:
+            raise
+
+    async def poll_once(self) -> None:
+        transport = TelegramTransport(self.storage, self.client)
+        for bot in await self.storage.list_telegram_bots():
+            if not bot.enabled:
+                continue
+            try:
+                token = transport._resolve_token(bot.token_ref)
+            except RuntimeError:
+                logger.warning("telegram bot token unavailable", extra={"identity_id": bot.identity_id})
+                continue
+            try:
+                updates = await self.client.get_updates(
+                    token,
+                    offset=self._offsets.get(bot.identity_id),
+                    timeout=self.update_timeout,
+                )
+            except Exception:
+                logger.exception("telegram getUpdates failed", extra={"identity_id": bot.identity_id})
+                continue
+            for update in updates:
+                await self._handle_update(transport, bot.identity_id, update)
+
+    async def _handle_update(
+        self, transport: TelegramTransport, receiver_identity: str, update: dict
+    ) -> None:
+        update_id = update.get("update_id")
+        if isinstance(update_id, int):
+            self._offsets[receiver_identity] = max(
+                update_id + 1,
+                self._offsets.get(receiver_identity, 0),
+            )
+        with suppress(KeyError, TypeError, ValueError):
+            msg = await transport.normalize_update(receiver_identity, update)
+            if not msg.content:
+                return
+            await self.relay.process(
+                {
+                    "type": msg.type.value if isinstance(msg.type, MessageType) else msg.type,
+                    "content": msg.content,
+                    "target": msg.target,
+                    "thread": msg.thread,
+                    "skip_transport_delivery": True,
+                },
+                msg.sender,
+                msg.room,
+            )

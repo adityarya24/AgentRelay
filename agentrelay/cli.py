@@ -56,6 +56,8 @@ def cmd_start(args: argparse.Namespace) -> None:
         os.environ["AGENTRELAY_TG_TOKEN"] = args.telegram_token
     if args.telegram_chat:
         os.environ["AGENTRELAY_TG_CHAT"] = args.telegram_chat
+    if args.telegram_transport:
+        os.environ["AGENTRELAY_TELEGRAM_TRANSPORT"] = "1"
     db_path = args.db_path or os.getenv("AGENTRELAY_DB_PATH") or default_db_path()
     logging.basicConfig(
         level=getattr(logging, str(cfg.get("logging", {}).get("level", "INFO")).upper(), logging.INFO),
@@ -422,6 +424,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--token")
     start.add_argument("--telegram-token")
     start.add_argument("--telegram-chat")
+    start.add_argument("--telegram-transport", action="store_true")
     start.add_argument("--db-path")
     start.add_argument("--config")
     start.set_defaults(func=cmd_start)

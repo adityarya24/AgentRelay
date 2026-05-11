@@ -20,6 +20,7 @@ from .governance import GovernanceEngine
 from .models import Agent, GovernanceConfig, Message, MessageType, Room, ThreadState
 from .policy import PolicyEngine
 from .storage import Storage
+from .telegram_transport import TelegramClient, TelegramTransport
 
 TokenHook = Callable[[Message], Awaitable[None]]
 logger = logging.getLogger("agentrelay.relay")
@@ -66,6 +67,7 @@ class Relay:
         self._locks_lock = asyncio.Lock()
         self._tasks: list[asyncio.Task] = []
         self._tg_hook: TokenHook | None = None
+        self._telegram_transport_client: TelegramClient | None = None
         self.counters: dict[str, int] = {
             "messages_received": 0,
             "messages_sent": 0,
@@ -77,6 +79,9 @@ class Relay:
 
     def set_telegram_hook(self, hook: TokenHook | None) -> None:
         self._tg_hook = hook
+
+    def set_telegram_transport_client(self, client: TelegramClient | None) -> None:
+        self._telegram_transport_client = client
 
     async def startup(self) -> None:
         await self.storage.init()
@@ -99,6 +104,12 @@ class Relay:
             tg_bot = TelegramBot(self, tg_token, tg_chat)
             self.set_telegram_hook(tg_bot.forward)
             self._tasks.append(asyncio.create_task(tg_bot.run()))
+        if os.getenv("AGENTRELAY_TELEGRAM_TRANSPORT", "").lower() in {"1", "true", "yes"}:
+            from .telegram_transport import TelegramBotRunner, TelegramHTTPClient
+
+            client = self._telegram_transport_client or TelegramHTTPClient()
+            self.set_telegram_transport_client(client)
+            self._tasks.append(asyncio.create_task(TelegramBotRunner(self, client).run()))
 
     async def shutdown(self) -> None:
         await self.storage.store_governance(self.governance.export_state())
@@ -244,6 +255,27 @@ class Relay:
         logger.info("queued offline dm", extra={"target": target, "sender": msg.sender})
         return 0
 
+    async def _send_transport_dm(self, target: str, msg: Message) -> int:
+        if self._telegram_transport_client is None:
+            return 0
+        if await self.storage.get_telegram_bot(target) is None:
+            return 0
+        result = await TelegramTransport(self.storage, self._telegram_transport_client).send_private(
+            msg.sender,
+            target,
+            msg.content,
+        )
+        if result.get("status") == "sent":
+            self.counters["messages_sent"] += 1
+            return 1
+        if result.get("status") == "blocked":
+            self.counters["messages_rejected"] += 1
+            logger.info(
+                "telegram dm blocked by policy",
+                extra={"sender": msg.sender, "target": target, "error": result.get("error")},
+            )
+        return 0
+
     async def _check_policy_routes(
         self, sender: str, room: str, target: str | None, mentions: list[str], thread: str | None
     ) -> dict | None:
@@ -324,8 +356,14 @@ class Relay:
                 return await self._reject(sender, room, error or "GOVERNANCE_BLOCK", retry_after, msg.thread)
             self.governance.record(sender, room, msg.thread)
 
+        skip_transport_delivery = bool(raw.get("skip_transport_delivery"))
         await self.storage.store_message(msg)
-        delivered = await self._send_dm(msg.target, msg) if msg.target else await self._broadcast(room, msg.wire())
+        if msg.target:
+            delivered = await self._send_dm(msg.target, msg)
+            if not delivered and not skip_transport_delivery:
+                delivered = await self._send_transport_dm(msg.target, msg)
+        else:
+            delivered = await self._broadcast(room, msg.wire())
         ack = {"type": "system", "content": "ack", "ref_id": msg.id, "seq": msg.seq}
         await self._send(sender, room, ack)
 
