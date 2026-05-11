@@ -9,7 +9,7 @@ from typing import Any
 
 import aiosqlite
 
-from .models import Identity, Message, MessageType, ThreadState, utc_timestamp
+from .models import Identity, Message, MessageType, PolicyRule, ThreadState, utc_timestamp
 
 
 class Storage:
@@ -56,11 +56,23 @@ class Storage:
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS policies (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                target TEXT NOT NULL,
+                room TEXT NOT NULL DEFAULT '*',
+                effect TEXT NOT NULL,
+                reason TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_msg_room_seq ON messages(room, seq);
             CREATE INDEX IF NOT EXISTS idx_msg_thread ON messages(thread);
             CREATE INDEX IF NOT EXISTS idx_msg_ts ON messages(ts);
             CREATE INDEX IF NOT EXISTS idx_identity_kind ON identities(kind);
             CREATE INDEX IF NOT EXISTS idx_identity_transport ON identities(transport);
+            CREATE INDEX IF NOT EXISTS idx_policy_route ON policies(source, target, room);
             """
         )
         await self._ensure_thread_schema()
@@ -356,6 +368,84 @@ class Storage:
             (int(enabled), utc_timestamp(), identity_id),
         )
         return await self.get_identity(identity_id)
+
+    @staticmethod
+    def _policy_from_row(row: tuple) -> PolicyRule:
+        return PolicyRule(
+            id=row[0],
+            source=row[1],
+            target=row[2],
+            room=row[3],
+            effect=row[4],
+            reason=row[5],
+            enabled=bool(row[6]),
+            created_at=row[7],
+            updated_at=row[8],
+        )
+
+    async def upsert_policy(self, rule: PolicyRule) -> PolicyRule:
+        now = utc_timestamp()
+        existing = await self.get_policy(rule.id)
+        created_at = existing.created_at if existing else rule.created_at
+        saved = rule.model_copy(update={"created_at": created_at, "updated_at": now})
+        await self._execute(
+            """
+            INSERT INTO policies (
+                id, source, target, room, effect, reason, enabled, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                source=excluded.source,
+                target=excluded.target,
+                room=excluded.room,
+                effect=excluded.effect,
+                reason=excluded.reason,
+                enabled=excluded.enabled,
+                updated_at=excluded.updated_at
+            """,
+            (
+                saved.id,
+                saved.source,
+                saved.target,
+                saved.room,
+                saved.effect.value,
+                saved.reason,
+                int(saved.enabled),
+                saved.created_at,
+                saved.updated_at,
+            ),
+        )
+        return saved
+
+    async def get_policy(self, rule_id: str) -> PolicyRule | None:
+        cursor = await self.db.execute(
+            """
+            SELECT id, source, target, room, effect, reason, enabled, created_at, updated_at
+            FROM policies
+            WHERE id=?
+            """,
+            (rule_id,),
+        )
+        row = await cursor.fetchone()
+        return self._policy_from_row(row) if row else None
+
+    async def list_policies(self, include_disabled: bool = False) -> list[PolicyRule]:
+        sql = """
+            SELECT id, source, target, room, effect, reason, enabled, created_at, updated_at
+            FROM policies
+        """
+        if not include_disabled:
+            sql += " WHERE enabled=1"
+        sql += " ORDER BY source, target, room, effect, id"
+        cursor = await self.db.execute(sql)
+        return [self._policy_from_row(row) for row in await cursor.fetchall()]
+
+    async def set_policy_enabled(self, rule_id: str, enabled: bool) -> PolicyRule | None:
+        await self._execute(
+            "UPDATE policies SET enabled=?, updated_at=? WHERE id=?",
+            (int(enabled), utc_timestamp(), rule_id),
+        )
+        return await self.get_policy(rule_id)
 
     async def store_governance(self, state: dict) -> None:
         await self._execute(

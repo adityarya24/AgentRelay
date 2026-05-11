@@ -55,6 +55,11 @@ class TrustLevel(str, Enum):
     BLOCKED = "blocked"
 
 
+class PolicyEffect(str, Enum):
+    ALLOW = "allow"
+    DENY = "deny"
+
+
 class Message(BaseModel):
     id: str = Field(default_factory=make_id)
     sender: str
@@ -98,6 +103,24 @@ class Identity(BaseModel):
     secret_ref: str | None = None
     created_at: float = Field(default_factory=utc_timestamp)
     updated_at: float = Field(default_factory=utc_timestamp)
+
+
+class PolicyRule(BaseModel):
+    id: str = Field(default_factory=make_id)
+    source: str
+    target: str
+    room: str = "*"
+    effect: PolicyEffect
+    reason: str | None = None
+    enabled: bool = True
+    created_at: float = Field(default_factory=utc_timestamp)
+    updated_at: float = Field(default_factory=utc_timestamp)
+
+
+class PolicyDecision(BaseModel):
+    allowed: bool
+    reason: str
+    rule_id: str | None = None
 
 
 class GovernanceConfig(BaseModel):

@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from . import __version__
 from .governance import GovernanceEngine
 from .models import Agent, GovernanceConfig, Message, MessageType, Room, ThreadState
+from .policy import PolicyEngine
 from .storage import Storage
 
 TokenHook = Callable[[Message], Awaitable[None]]
@@ -243,6 +244,24 @@ class Relay:
         logger.info("queued offline dm", extra={"target": target, "sender": msg.sender})
         return 0
 
+    async def _check_policy_routes(
+        self, sender: str, room: str, target: str | None, mentions: list[str], thread: str | None
+    ) -> dict | None:
+        engine = PolicyEngine(self.storage)
+        route_targets = [target] if target else mentions or ["*"]
+        for route_target in route_targets:
+            decision = await engine.evaluate(sender, route_target, room)
+            if not decision.allowed:
+                self.counters["messages_rejected"] += 1
+                return await self._reject(
+                    sender,
+                    room,
+                    decision.reason,
+                    thread=thread,
+                    rule_id=decision.rule_id,
+                )
+        return None
+
     async def process(self, raw: dict, sender: str, room: str) -> dict:
         self.counters["messages_received"] += 1
         content = str(raw.get("content", ""))
@@ -278,6 +297,15 @@ class Relay:
         mentions = raw.get("mentions") or []
         if isinstance(mentions, str):
             mentions = [mentions]
+        mentions = [str(mention) for mention in mentions]
+        if rejected := await self._check_policy_routes(
+            sender,
+            room,
+            str(target) if target else None,
+            mentions,
+            str(thread) if thread else None,
+        ):
+            return rejected
         msg = Message(
             sender=sender,
             room=room,
@@ -285,7 +313,7 @@ class Relay:
             thread=str(thread) if thread else None,
             type=MessageType.DM if target else msg_type,
             target=str(target) if target else None,
-            mentions=list(mentions),
+            mentions=mentions,
         )
 
         lock = await self._room_lock(room)
@@ -325,12 +353,15 @@ class Relay:
         error: str,
         retry_after: int | None = None,
         thread: str | None = None,
+        rule_id: str | None = None,
     ) -> dict:
         payload = {"type": "system", "content": f"governance_block: {error}", "error": error}
         if retry_after is not None:
             payload["retry_after"] = retry_after
         if thread:
             payload["thread"] = thread
+        if rule_id:
+            payload["rule_id"] = rule_id
         await self._send(agent, room, payload)
         return payload
 

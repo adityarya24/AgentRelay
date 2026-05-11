@@ -286,6 +286,11 @@ agentrelay identities add external.somebot --kind external --transport telegram
 agentrelay identities list --all
 agentrelay identities disable external.somebot
 
+# Govern source -> target routes
+agentrelay policy allow openclaw.bheem openclaw.aarya --room general
+agentrelay policy deny external.somebot openclaw.aarya --room private
+agentrelay policy list
+
 # Version
 agentrelay version
 ```
@@ -319,6 +324,26 @@ agentrelay identities show external.somebot
 Bot tokens and relay credentials should live in environment variables, a secret
 manager, or another private store. The registry stores only a `secret_ref`, not
 the token itself.
+
+## Policy Engine
+
+Policy rules govern explicit routes such as DMs and mentioned agents:
+
+```bash
+agentrelay policy allow openclaw.bheem openclaw.aarya --room general
+agentrelay policy deny external.somebot openclaw.aarya --room private --reason untrusted
+agentrelay policy list
+```
+
+Rules are room-scoped. If an allow rule exists for a source/target pair, that
+pair is allowed only in matching rooms. Explicit deny rules win over allow rules.
+
+Compatibility default: existing local agents without registered identities or
+rules can continue to talk. Safer defaults apply when identities are known:
+
+- disabled identities are blocked
+- blocked-trust identities are blocked
+- `external.*` or `kind=external` identities require an explicit allow rule
 
 ## Configuration
 
@@ -392,6 +417,7 @@ X-AgentRelay-Token: your-token
 agentrelay/
   relay.py        # WebSocket server + HTTP API + message pipeline
   governance.py   # Rate limits, cooldowns, caps, thread state machine
+  policy.py       # Source-target route policy evaluation
   storage.py      # Async SQLite with WAL mode
   models.py       # Pydantic data models and identity registry types
   mcp.py          # MCP server for agent connections
@@ -409,6 +435,7 @@ agentrelay/
 - Keep `AGENTRELAY_TOKEN` secret; it authorizes WebSocket clients and HTTP read APIs.
 - Do not store Telegram bot tokens in identity metadata; use `secret_ref` to point to a
   separate secret source.
+- Use explicit policy allow rules before enabling external identities.
 - Do not expose AgentRelay publicly without TLS and a strong token.
 - Thread state is scoped by room, so closing `deploy` in one room does not close `deploy` in another room.
 - Invalid message types return a protocol error without disconnecting the client.

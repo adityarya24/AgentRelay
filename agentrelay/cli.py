@@ -12,7 +12,7 @@ from pathlib import Path
 import uvicorn
 
 from . import __version__
-from .models import Identity, IdentityKind, IdentityTransport, TrustLevel
+from .models import Identity, IdentityKind, IdentityTransport, PolicyEffect, PolicyRule, TrustLevel
 from .relay import create_app, default_db_path, ensure_token
 from .storage import Storage
 
@@ -188,6 +188,73 @@ def cmd_identities(args: argparse.Namespace) -> None:
         raise SystemExit(1) from exc
 
 
+def _policy_json(rule: PolicyRule) -> str:
+    return json.dumps(rule.model_dump(mode="json"), ensure_ascii=False)
+
+
+async def _policy_add(args: argparse.Namespace, effect: PolicyEffect) -> None:
+    storage = await _identity_storage(args)
+    try:
+        rule = PolicyRule(
+            source=args.source,
+            target=args.target,
+            room=args.room,
+            effect=effect,
+            reason=args.reason,
+        )
+        saved = await storage.upsert_policy(rule)
+        print(_policy_json(saved) if args.json else f"{saved.effect.value} {saved.source} -> {saved.target}")
+    finally:
+        await storage.close()
+
+
+async def _policy_list(args: argparse.Namespace) -> None:
+    storage = await _identity_storage(args)
+    try:
+        rules = await storage.list_policies(include_disabled=args.all)
+        if args.json:
+            print(json.dumps([rule.model_dump(mode="json") for rule in rules], ensure_ascii=False))
+            return
+        for rule in rules:
+            status = "enabled" if rule.enabled else "disabled"
+            print(
+                f"{rule.id}\t{rule.effect.value}\t{rule.source}\t{rule.target}\t"
+                f"{rule.room}\t{status}\t{rule.reason or '-'}"
+            )
+    finally:
+        await storage.close()
+
+
+async def _policy_set_enabled(args: argparse.Namespace, enabled: bool) -> None:
+    storage = await _identity_storage(args)
+    try:
+        rule = await storage.set_policy_enabled(args.id, enabled)
+        if rule is None:
+            raise KeyError(args.id)
+        print(_policy_json(rule) if args.json else f"{rule.id} {'enabled' if enabled else 'disabled'}")
+    finally:
+        await storage.close()
+
+
+def cmd_policy(args: argparse.Namespace) -> None:
+    try:
+        if args.policy_cmd == "allow":
+            asyncio.run(_policy_add(args, PolicyEffect.ALLOW))
+        elif args.policy_cmd == "deny":
+            asyncio.run(_policy_add(args, PolicyEffect.DENY))
+        elif args.policy_cmd == "list":
+            asyncio.run(_policy_list(args))
+        elif args.policy_cmd == "enable":
+            asyncio.run(_policy_set_enabled(args, True))
+        elif args.policy_cmd == "disable":
+            asyncio.run(_policy_set_enabled(args, False))
+        else:
+            raise ValueError("missing policy command")
+    except Exception as exc:
+        print(f"agentrelay policy failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
 def _normalize_ws_url(url: str) -> str:
     base = (url or DEFAULT_URL).rstrip("/")
     if base.startswith("http://"):
@@ -311,6 +378,34 @@ def build_parser() -> argparse.ArgumentParser:
     identity_disable.add_argument("id")
     identity_disable.add_argument("--json", action="store_true")
     identity_disable.set_defaults(func=cmd_identities)
+
+    policy = sub.add_parser("policy", help="manage route policy rules")
+    policy.add_argument("--db-path")
+    policy_sub = policy.add_subparsers(dest="policy_cmd", required=True)
+
+    for name in ("allow", "deny"):
+        route = policy_sub.add_parser(name, help=f"add a {name} route rule")
+        route.add_argument("source")
+        route.add_argument("target")
+        route.add_argument("--room", default="*")
+        route.add_argument("--reason")
+        route.add_argument("--json", action="store_true")
+        route.set_defaults(func=cmd_policy)
+
+    policy_list = policy_sub.add_parser("list", help="list policy rules")
+    policy_list.add_argument("--all", action="store_true", help="include disabled rules")
+    policy_list.add_argument("--json", action="store_true")
+    policy_list.set_defaults(func=cmd_policy)
+
+    policy_enable = policy_sub.add_parser("enable", help="enable a policy rule")
+    policy_enable.add_argument("id")
+    policy_enable.add_argument("--json", action="store_true")
+    policy_enable.set_defaults(func=cmd_policy)
+
+    policy_disable = policy_sub.add_parser("disable", help="disable a policy rule")
+    policy_disable.add_argument("id")
+    policy_disable.add_argument("--json", action="store_true")
+    policy_disable.set_defaults(func=cmd_policy)
     return parser
 
 
