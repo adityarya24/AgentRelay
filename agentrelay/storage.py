@@ -9,7 +9,7 @@ from typing import Any
 
 import aiosqlite
 
-from .models import Message, MessageType, ThreadState
+from .models import Identity, Message, MessageType, ThreadState, utc_timestamp
 
 
 class Storage:
@@ -43,9 +43,24 @@ class Storage:
                 data TEXT NOT NULL,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS identities (
+                id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                transport TEXT NOT NULL,
+                capabilities TEXT NOT NULL DEFAULT '[]',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                trust_level TEXT NOT NULL,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                secret_ref TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_msg_room_seq ON messages(room, seq);
             CREATE INDEX IF NOT EXISTS idx_msg_thread ON messages(thread);
             CREATE INDEX IF NOT EXISTS idx_msg_ts ON messages(ts);
+            CREATE INDEX IF NOT EXISTS idx_identity_kind ON identities(kind);
+            CREATE INDEX IF NOT EXISTS idx_identity_transport ON identities(transport);
             """
         )
         await self._ensure_thread_schema()
@@ -254,6 +269,93 @@ class Storage:
             "SELECT room, id FROM threads WHERE state IN ('closing', 'closed')"
         )
         return [(str(row[0]), str(row[1])) for row in await cursor.fetchall()]
+
+    @staticmethod
+    def _identity_from_row(row: tuple) -> Identity:
+        return Identity(
+            id=row[0],
+            display_name=row[1],
+            kind=row[2],
+            transport=row[3],
+            capabilities=json.loads(row[4]),
+            enabled=bool(row[5]),
+            trust_level=row[6],
+            metadata=json.loads(row[7]),
+            secret_ref=row[8],
+            created_at=row[9],
+            updated_at=row[10],
+        )
+
+    async def upsert_identity(self, identity: Identity) -> Identity:
+        now = utc_timestamp()
+        existing = await self.get_identity(identity.id)
+        created_at = existing.created_at if existing else identity.created_at
+        saved = identity.model_copy(update={"created_at": created_at, "updated_at": now})
+        await self._execute(
+            """
+            INSERT INTO identities (
+                id, display_name, kind, transport, capabilities, enabled, trust_level,
+                metadata, secret_ref, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                display_name=excluded.display_name,
+                kind=excluded.kind,
+                transport=excluded.transport,
+                capabilities=excluded.capabilities,
+                enabled=excluded.enabled,
+                trust_level=excluded.trust_level,
+                metadata=excluded.metadata,
+                secret_ref=excluded.secret_ref,
+                updated_at=excluded.updated_at
+            """,
+            (
+                saved.id,
+                saved.display_name,
+                saved.kind.value,
+                saved.transport.value,
+                json.dumps(saved.capabilities),
+                int(saved.enabled),
+                saved.trust_level.value,
+                json.dumps(saved.metadata),
+                saved.secret_ref,
+                saved.created_at,
+                saved.updated_at,
+            ),
+        )
+        return saved
+
+    async def get_identity(self, identity_id: str) -> Identity | None:
+        cursor = await self.db.execute(
+            """
+            SELECT id, display_name, kind, transport, capabilities, enabled, trust_level,
+                   metadata, secret_ref, created_at, updated_at
+            FROM identities
+            WHERE id=?
+            """,
+            (identity_id,),
+        )
+        row = await cursor.fetchone()
+        return self._identity_from_row(row) if row else None
+
+    async def list_identities(self, include_disabled: bool = False) -> list[Identity]:
+        sql = """
+            SELECT id, display_name, kind, transport, capabilities, enabled, trust_level,
+                   metadata, secret_ref, created_at, updated_at
+            FROM identities
+        """
+        if not include_disabled:
+            sql += " WHERE enabled=1"
+        sql += " ORDER BY id"
+        cursor = await self.db.execute(sql)
+        return [self._identity_from_row(row) for row in await cursor.fetchall()]
+
+    async def set_identity_enabled(self, identity_id: str, enabled: bool) -> Identity | None:
+        await self._execute(
+            "UPDATE identities SET enabled=?, updated_at=? WHERE id=?",
+            (int(enabled), utc_timestamp(), identity_id),
+        )
+        return await self.get_identity(identity_id)
 
     async def store_governance(self, state: dict) -> None:
         await self._execute(

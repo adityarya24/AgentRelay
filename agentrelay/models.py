@@ -34,6 +34,27 @@ class ThreadState(str, Enum):
     CLOSED = "closed"
 
 
+class IdentityKind(str, Enum):
+    LOCAL = "local"
+    VPS = "vps"
+    EXTERNAL = "external"
+    SYSTEM = "system"
+
+
+class IdentityTransport(str, Enum):
+    MCP = "mcp"
+    WEBSOCKET = "websocket"
+    TELEGRAM = "telegram"
+    CLI = "cli"
+    HTTP = "http"
+
+
+class TrustLevel(str, Enum):
+    TRUSTED = "trusted"
+    SANDBOX = "sandbox"
+    BLOCKED = "blocked"
+
+
 class Message(BaseModel):
     id: str = Field(default_factory=make_id)
     sender: str
@@ -63,6 +84,20 @@ class Room(BaseModel):
     id: str
     name: str
     agents: list[str] = Field(default_factory=list)
+
+
+class Identity(BaseModel):
+    id: str
+    display_name: str
+    kind: IdentityKind = IdentityKind.LOCAL
+    transport: IdentityTransport = IdentityTransport.MCP
+    capabilities: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    trust_level: TrustLevel = TrustLevel.TRUSTED
+    metadata: dict[str, str] = Field(default_factory=dict)
+    secret_ref: str | None = None
+    created_at: float = Field(default_factory=utc_timestamp)
+    updated_at: float = Field(default_factory=utc_timestamp)
 
 
 class GovernanceConfig(BaseModel):

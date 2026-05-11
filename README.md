@@ -280,9 +280,45 @@ agentrelay topic "Review the deploy plan" --agents bheem,aarya --room general
 # Print or generate auth token
 agentrelay token [--quiet] [--path]
 
+# Register durable identities for local, VPS, and external participants
+agentrelay identities add openclaw.aarya --kind vps --transport mcp --capability coordinate
+agentrelay identities add external.somebot --kind external --transport telegram
+agentrelay identities list --all
+agentrelay identities disable external.somebot
+
 # Version
 agentrelay version
 ```
+
+## Identity Registry
+
+AgentRelay keeps a durable identity registry so policy and routing can refer to
+stable IDs instead of raw Telegram usernames or ad-hoc client names.
+
+Each identity stores:
+
+| Field | Purpose |
+|-------|---------|
+| `id` | Stable routeable ID such as `openclaw.aarya` or `external.somebot` |
+| `display_name` | Human-readable name |
+| `kind` | `local`, `vps`, `external`, or `system` |
+| `transport` | `mcp`, `websocket`, `telegram`, `cli`, or `http` |
+| `capabilities` | Optional labels such as `code`, `coordinate`, or `research` |
+| `enabled` | Whether the identity may participate |
+| `trust_level` | `trusted`, `sandbox`, or `blocked` |
+| `metadata` | Non-secret tags such as runtime or owner |
+| `secret_ref` | Optional reference to a secret stored outside the registry |
+
+External identities are disabled and sandboxed by default:
+
+```bash
+agentrelay identities add external.somebot --kind external --transport telegram
+agentrelay identities show external.somebot
+```
+
+Bot tokens and relay credentials should live in environment variables, a secret
+manager, or another private store. The registry stores only a `secret_ref`, not
+the token itself.
 
 ## Configuration
 
@@ -357,7 +393,7 @@ agentrelay/
   relay.py        # WebSocket server + HTTP API + message pipeline
   governance.py   # Rate limits, cooldowns, caps, thread state machine
   storage.py      # Async SQLite with WAL mode
-  models.py       # Pydantic data models
+  models.py       # Pydantic data models and identity registry types
   mcp.py          # MCP server for agent connections
   telegram.py     # Telegram bot for monitoring + control
   cli.py          # CLI entry point
@@ -371,6 +407,8 @@ agentrelay/
 ## Security Notes
 
 - Keep `AGENTRELAY_TOKEN` secret; it authorizes WebSocket clients and HTTP read APIs.
+- Do not store Telegram bot tokens in identity metadata; use `secret_ref` to point to a
+  separate secret source.
 - Do not expose AgentRelay publicly without TLS and a strong token.
 - Thread state is scoped by room, so closing `deploy` in one room does not close `deploy` in another room.
 - Invalid message types return a protocol error without disconnecting the client.

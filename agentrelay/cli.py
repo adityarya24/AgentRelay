@@ -12,7 +12,9 @@ from pathlib import Path
 import uvicorn
 
 from . import __version__
+from .models import Identity, IdentityKind, IdentityTransport, TrustLevel
 from .relay import create_app, default_db_path, ensure_token
+from .storage import Storage
 
 DEFAULT_URL = "ws://localhost:8899"
 
@@ -71,6 +73,119 @@ def cmd_token(args: argparse.Namespace) -> None:
 
 def cmd_version(_: argparse.Namespace) -> None:
     print(__version__)
+
+
+def _parse_kv(items: list[str] | None) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for item in items or []:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise ValueError(f"metadata must be KEY=VALUE, got {item!r}")
+        parsed[key] = value
+    return parsed
+
+
+def _identity_json(identity: Identity) -> str:
+    return json.dumps(identity.model_dump(mode="json"), ensure_ascii=False)
+
+
+async def _identity_storage(args: argparse.Namespace) -> Storage:
+    storage = Storage(args.db_path or os.getenv("AGENTRELAY_DB_PATH") or default_db_path())
+    await storage.init()
+    return storage
+
+
+def _default_trust(identity_id: str, kind: IdentityKind) -> TrustLevel:
+    if kind == IdentityKind.EXTERNAL or identity_id.startswith("external."):
+        return TrustLevel.SANDBOX
+    return TrustLevel.TRUSTED
+
+
+def _default_enabled(identity_id: str, kind: IdentityKind, explicit: bool | None) -> bool:
+    if explicit is not None:
+        return explicit
+    return not (kind == IdentityKind.EXTERNAL or identity_id.startswith("external."))
+
+
+async def _identities_add(args: argparse.Namespace) -> None:
+    storage = await _identity_storage(args)
+    try:
+        kind = IdentityKind(args.kind)
+        trust_level = TrustLevel(args.trust_level) if args.trust_level else _default_trust(args.id, kind)
+        identity = Identity(
+            id=args.id,
+            display_name=args.display_name or args.id,
+            kind=kind,
+            transport=IdentityTransport(args.transport),
+            capabilities=sorted(set(args.capability or [])),
+            enabled=_default_enabled(args.id, kind, args.enabled),
+            trust_level=trust_level,
+            metadata=_parse_kv(args.metadata),
+            secret_ref=args.secret_ref,
+        )
+        saved = await storage.upsert_identity(identity)
+        print(_identity_json(saved) if args.json else f"saved {saved.id} ({saved.trust_level.value})")
+    finally:
+        await storage.close()
+
+
+async def _identities_list(args: argparse.Namespace) -> None:
+    storage = await _identity_storage(args)
+    try:
+        identities = await storage.list_identities(include_disabled=args.all)
+        if args.json:
+            print(json.dumps([i.model_dump(mode="json") for i in identities], ensure_ascii=False))
+            return
+        for identity in identities:
+            status = "enabled" if identity.enabled else "disabled"
+            caps = ",".join(identity.capabilities) if identity.capabilities else "-"
+            print(
+                f"{identity.id}\t{identity.display_name}\t{identity.kind.value}\t"
+                f"{identity.transport.value}\t{identity.trust_level.value}\t{status}\t{caps}"
+            )
+    finally:
+        await storage.close()
+
+
+async def _identities_show(args: argparse.Namespace) -> None:
+    storage = await _identity_storage(args)
+    try:
+        identity = await storage.get_identity(args.id)
+        if identity is None:
+            raise KeyError(args.id)
+        print(_identity_json(identity))
+    finally:
+        await storage.close()
+
+
+async def _identities_set_enabled(args: argparse.Namespace, enabled: bool) -> None:
+    storage = await _identity_storage(args)
+    try:
+        identity = await storage.set_identity_enabled(args.id, enabled)
+        if identity is None:
+            raise KeyError(args.id)
+        print(_identity_json(identity) if args.json else f"{identity.id} {'enabled' if enabled else 'disabled'}")
+    finally:
+        await storage.close()
+
+
+def cmd_identities(args: argparse.Namespace) -> None:
+    try:
+        if args.identities_cmd == "add":
+            asyncio.run(_identities_add(args))
+        elif args.identities_cmd == "list":
+            asyncio.run(_identities_list(args))
+        elif args.identities_cmd == "show":
+            asyncio.run(_identities_show(args))
+        elif args.identities_cmd == "enable":
+            asyncio.run(_identities_set_enabled(args, True))
+        elif args.identities_cmd == "disable":
+            asyncio.run(_identities_set_enabled(args, False))
+        else:
+            raise ValueError("missing identities command")
+    except Exception as exc:
+        print(f"agentrelay identities failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 def _normalize_ws_url(url: str) -> str:
@@ -150,6 +265,52 @@ def build_parser() -> argparse.ArgumentParser:
 
     version = sub.add_parser("version", help="print version")
     version.set_defaults(func=cmd_version)
+
+    identities = sub.add_parser("identities", help="manage durable participant identities")
+    identities.add_argument("--db-path")
+    identities_sub = identities.add_subparsers(dest="identities_cmd", required=True)
+
+    identity_add = identities_sub.add_parser("add", help="add or update an identity")
+    identity_add.add_argument("id")
+    identity_add.add_argument("--display-name")
+    identity_add.add_argument(
+        "--kind",
+        choices=[kind.value for kind in IdentityKind],
+        default=IdentityKind.LOCAL.value,
+    )
+    identity_add.add_argument(
+        "--transport",
+        choices=[transport.value for transport in IdentityTransport],
+        default=IdentityTransport.MCP.value,
+    )
+    identity_add.add_argument("--capability", action="append", default=[])
+    identity_add.add_argument("--metadata", action="append", default=[], metavar="KEY=VALUE")
+    identity_add.add_argument("--secret-ref")
+    identity_add.add_argument("--trust-level", choices=[level.value for level in TrustLevel])
+    identity_enabled = identity_add.add_mutually_exclusive_group()
+    identity_enabled.add_argument("--enable", dest="enabled", action="store_true")
+    identity_enabled.add_argument("--disable", dest="enabled", action="store_false")
+    identity_add.set_defaults(func=cmd_identities, enabled=None)
+    identity_add.add_argument("--json", action="store_true")
+
+    identity_list = identities_sub.add_parser("list", help="list identities")
+    identity_list.add_argument("--all", action="store_true", help="include disabled identities")
+    identity_list.add_argument("--json", action="store_true")
+    identity_list.set_defaults(func=cmd_identities)
+
+    identity_show = identities_sub.add_parser("show", help="show one identity as JSON")
+    identity_show.add_argument("id")
+    identity_show.set_defaults(func=cmd_identities)
+
+    identity_enable = identities_sub.add_parser("enable", help="enable an identity")
+    identity_enable.add_argument("id")
+    identity_enable.add_argument("--json", action="store_true")
+    identity_enable.set_defaults(func=cmd_identities)
+
+    identity_disable = identities_sub.add_parser("disable", help="disable an identity")
+    identity_disable.add_argument("id")
+    identity_disable.add_argument("--json", action="store_true")
+    identity_disable.set_defaults(func=cmd_identities)
     return parser
 
 
