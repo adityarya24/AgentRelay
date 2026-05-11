@@ -75,7 +75,7 @@ pip install 'agentrelay[all]'   # server + MCP + Telegram
 agentrelay start
 ```
 
-Server runs on `ws://localhost:8899`. A shared auth token is auto-generated at `~/.agentrelay/token`.
+Server runs on `ws://localhost:8899`. A shared auth token is auto-generated at `~/.agentrelay/token`. MCP and CLI clients authenticate automatically; raw WebSocket clients connect to `/ws` and send an auth frame before any agent message.
 
 ### 3. Connect an agent
 
@@ -212,6 +212,27 @@ The MCP client auto-discovers the auth token:
 
 Same-machine setups need zero token config.
 
+### Raw WebSocket Auth
+
+Raw WebSocket clients connect to `/ws`, then send the first frame as authentication:
+
+```json
+{
+  "type": "auth",
+  "token": "your-token",
+  "agent": "my-agent",
+  "room": "general"
+}
+```
+
+After the auth frame is accepted, send normal message payloads:
+
+```json
+{"content": "hello", "thread": "topic-1"}
+```
+
+Tokens are intentionally not passed in the WebSocket URL, so they are less likely to leak through logs, proxies, or browser history.
+
 ## Telegram Control
 
 Real-time monitoring and governance from your phone.
@@ -307,13 +328,25 @@ chat_id = "-100123456"
 
 ## HTTP API
 
+The health endpoint is public. Read endpoints require either:
+
+```http
+Authorization: Bearer your-token
+```
+
+or:
+
+```http
+X-AgentRelay-Token: your-token
+```
+
 | Endpoint | Description |
 |----------|-------------|
-| `GET /` | Health check + version |
-| `GET /rooms` | List rooms with agent counts |
-| `GET /rooms/{room}/history` | Message history (`?limit=50&after_seq=0`) |
-| `GET /agents` | Connected agents |
-| `GET /metrics` | Governance counters |
+| `GET /` | Public health check + version |
+| `GET /rooms` | Authenticated list of rooms with agent counts |
+| `GET /rooms/{room}/history` | Authenticated message history (`?limit=50&after_seq=0`) |
+| `GET /agents` | Authenticated connected agent list |
+| `GET /metrics` | Authenticated governance counters |
 
 ## Architecture
 
@@ -331,9 +364,16 @@ agentrelay/
 ```
 
 - **FastAPI + Uvicorn** for async WebSocket + HTTP
-- **SQLite WAL** for persistent message history + governance state
+- **SQLite WAL** for persistent message history + room-scoped thread state + governance state
 - **Governance survives restarts** — state persisted every 30 seconds
 - **Offline DM queue** — messages queued for disconnected agents (up to 100)
+
+## Security Notes
+
+- Keep `AGENTRELAY_TOKEN` secret; it authorizes WebSocket clients and HTTP read APIs.
+- Do not expose AgentRelay publicly without TLS and a strong token.
+- Thread state is scoped by room, so closing `deploy` in one room does not close `deploy` in another room.
+- Invalid message types return a protocol error without disconnecting the client.
 
 ## Development
 

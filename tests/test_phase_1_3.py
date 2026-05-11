@@ -12,6 +12,13 @@ from agentrelay.relay import Relay, create_app
 from agentrelay.storage import Storage
 
 
+def auth_ws(ws, agent: str, room: str = "general") -> None:
+    ws.send_json({"type": "auth", "token": "test-token", "agent": agent, "room": room})
+
+
+AUTH_HEADERS = {"Authorization": "Bearer test-token"}
+
+
 @pytest.mark.asyncio
 async def test_storage_message_sequence_and_history():
     with tempfile.TemporaryDirectory() as td:
@@ -48,8 +55,8 @@ def test_http_health_and_empty_rooms():
         app = create_app(relay)
         with TestClient(app) as client:
             assert client.get("/").json()["status"] == "ok"
-            assert client.get("/rooms").json() == []
-            assert client.get("/agents").json() == []
+            assert client.get("/rooms", headers=AUTH_HEADERS).json() == []
+            assert client.get("/agents", headers=AUTH_HEADERS).json() == []
 
 
 def test_websocket_exchange_and_history():
@@ -61,8 +68,10 @@ def test_websocket_exchange_and_history():
         )
         app = create_app(relay)
         with TestClient(app) as client:
-            with client.websocket_connect("/ws?token=test-token&agent=a&room=general") as a:
-                with client.websocket_connect("/ws?token=test-token&agent=b&room=general") as b:
+            with client.websocket_connect("/ws") as a:
+                auth_ws(a, "a")
+                with client.websocket_connect("/ws") as b:
+                    auth_ws(b, "b")
                     # a receives b's join notification.
                     join = a.receive_json()
                     assert join["type"] == "join"
@@ -73,7 +82,7 @@ def test_websocket_exchange_and_history():
                     assert broadcast["content"] == "hello"
                     assert received["content"] == "hello"
                     assert ack["content"] == "ack"
-            history = client.get("/rooms/general/history").json()
+            history = client.get("/rooms/general/history", headers=AUTH_HEADERS).json()
             assert len(history) == 1
             assert history[0]["content"] == "hello"
 
@@ -84,5 +93,6 @@ def test_invalid_token_rejected():
         app = create_app(relay)
         with TestClient(app) as client:
             with pytest.raises(Exception):
-                with client.websocket_connect("/ws?token=bad&agent=a&room=general"):
-                    pass
+                with client.websocket_connect("/ws") as ws:
+                    ws.send_json({"type": "auth", "token": "bad", "agent": "a", "room": "general"})
+                    ws.receive_json()

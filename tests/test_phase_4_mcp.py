@@ -14,6 +14,13 @@ from agentrelay.mcp import ClientPool, RelayClient, create_mcp_server, discover_
 from agentrelay.relay import Relay, create_app
 
 
+def auth_ws(ws, agent: str, room: str = "general") -> None:
+    ws.send_json({"type": "auth", "token": "test-token", "agent": agent, "room": room})
+
+
+AUTH_HEADERS = {"Authorization": "Bearer test-token"}
+
+
 # ---------------------------------------------------------------------------
 # ClientPool unit tests
 # ---------------------------------------------------------------------------
@@ -112,9 +119,11 @@ def test_two_agents_see_correct_sender_fields():
         app = create_app(relay)
         with TestClient(app) as client:
             with (
-                client.websocket_connect("/ws?token=test-token&agent=bheem&room=team") as ws_bheem,
-                client.websocket_connect("/ws?token=test-token&agent=aarya&room=team") as ws_aarya,
+                client.websocket_connect("/ws") as ws_bheem,
+                client.websocket_connect("/ws") as ws_aarya,
             ):
+                auth_ws(ws_bheem, "bheem", "team")
+                auth_ws(ws_aarya, "aarya", "team")
                 # bheem receives aarya's join notification
                 join_msg = ws_bheem.receive_json()
                 assert join_msg["type"] == "join"
@@ -143,10 +152,12 @@ def test_list_agents_shows_both_connected_agents():
         app = create_app(relay)
         with TestClient(app) as client:
             with (
-                client.websocket_connect("/ws?token=test-token&agent=bheem&room=team") as _ws_bheem,
-                client.websocket_connect("/ws?token=test-token&agent=aarya&room=team") as _ws_aarya,
+                client.websocket_connect("/ws") as ws_bheem,
+                client.websocket_connect("/ws") as ws_aarya,
             ):
-                agents = client.get("/agents").json()
+                auth_ws(ws_bheem, "bheem", "team")
+                auth_ws(ws_aarya, "aarya", "team")
+                agents = client.get("/agents", headers=AUTH_HEADERS).json()
                 agent_ids = {a["id"] for a in agents}
                 assert "bheem" in agent_ids
                 assert "aarya" in agent_ids
@@ -162,9 +173,11 @@ def test_bheem_broadcast_arrives_at_aarya_with_correct_sender():
         app = create_app(relay)
         with TestClient(app) as client:
             with (
-                client.websocket_connect("/ws?token=test-token&agent=bheem&room=team") as ws_bheem,
-                client.websocket_connect("/ws?token=test-token&agent=aarya&room=team") as ws_aarya,
+                client.websocket_connect("/ws") as ws_bheem,
+                client.websocket_connect("/ws") as ws_aarya,
             ):
+                auth_ws(ws_bheem, "bheem", "team")
+                auth_ws(ws_aarya, "aarya", "team")
                 # discard join notification
                 ws_bheem.receive_json()
 
@@ -218,7 +231,8 @@ def test_relay_basic_websocket_connection_for_mcp_client():
         relay = Relay(token="test-token", db_path=str(Path(td) / "relay.db"))
         app = create_app(relay)
         with TestClient(app) as client:
-            with client.websocket_connect("/ws?token=test-token&agent=mcp&room=general") as ws:
+            with client.websocket_connect("/ws") as ws:
+                auth_ws(ws, "mcp")
                 ws.send_json({"content": "mcp connection ok"})
                 msg = ws.receive_json()
                 assert msg["content"] == "mcp connection ok"

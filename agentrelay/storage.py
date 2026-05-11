@@ -38,15 +38,6 @@ class Storage:
                 ts REAL NOT NULL,
                 seq INTEGER NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS threads (
-                id TEXT PRIMARY KEY,
-                room TEXT NOT NULL,
-                title TEXT NOT NULL DEFAULT '',
-                state TEXT NOT NULL DEFAULT 'open',
-                msg_count INTEGER NOT NULL DEFAULT 0,
-                created_at REAL NOT NULL,
-                closed_at REAL
-            );
             CREATE TABLE IF NOT EXISTS governance_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 data TEXT NOT NULL,
@@ -54,11 +45,61 @@ class Storage:
             );
             CREATE INDEX IF NOT EXISTS idx_msg_room_seq ON messages(room, seq);
             CREATE INDEX IF NOT EXISTS idx_msg_thread ON messages(thread);
-            CREATE INDEX IF NOT EXISTS idx_thread_room ON threads(room);
             CREATE INDEX IF NOT EXISTS idx_msg_ts ON messages(ts);
             """
         )
+        await self._ensure_thread_schema()
+        await self._db.execute("CREATE INDEX IF NOT EXISTS idx_thread_room ON threads(room)")
         await self._db.commit()
+
+    async def _ensure_thread_schema(self) -> None:
+        cursor = await self.db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='threads'"
+        )
+        exists = await cursor.fetchone()
+        if not exists:
+            await self.db.execute(
+                """
+                CREATE TABLE threads (
+                    id TEXT NOT NULL,
+                    room TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    state TEXT NOT NULL DEFAULT 'open',
+                    msg_count INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL,
+                    closed_at REAL,
+                    PRIMARY KEY (id, room)
+                )
+                """
+            )
+            return
+
+        cursor = await self.db.execute("PRAGMA table_info(threads)")
+        rows = await cursor.fetchall()
+        pk_cols = [row[1] for row in sorted((r for r in rows if r[5]), key=lambda r: r[5])]
+        if pk_cols == ["id", "room"]:
+            return
+
+        await self.db.executescript(
+            """
+            CREATE TABLE threads_new (
+                id TEXT NOT NULL,
+                room TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL DEFAULT 'open',
+                msg_count INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                closed_at REAL,
+                PRIMARY KEY (id, room)
+            );
+            INSERT OR REPLACE INTO threads_new
+                (id, room, title, state, msg_count, created_at, closed_at)
+            SELECT id, room, title, state, msg_count, created_at, closed_at
+            FROM threads;
+            DROP TABLE threads;
+            ALTER TABLE threads_new RENAME TO threads;
+            """
+        )
 
     @property
     def db(self) -> aiosqlite.Connection:
@@ -106,12 +147,13 @@ class Storage:
                         """
                         INSERT INTO threads (id, room, title, state, msg_count, created_at)
                         VALUES (?, ?, ?, 'open', 0, ?)
-                        ON CONFLICT(id) DO NOTHING
+                        ON CONFLICT(id, room) DO NOTHING
                         """,
                         (msg.thread, msg.room, msg.thread, time.time()),
                     )
                     await self.db.execute(
-                        "UPDATE threads SET msg_count = msg_count + 1 WHERE id=?", (msg.thread,)
+                        "UPDATE threads SET msg_count = msg_count + 1 WHERE id=? AND room=?",
+                        (msg.thread, msg.room),
                     )
                 await self.db.commit()
             except Exception:
@@ -144,12 +186,25 @@ class Storage:
         await self._execute(
             """
             INSERT OR REPLACE INTO threads (id, room, title, state, msg_count, created_at, closed_at)
-            VALUES (?, ?, ?, COALESCE((SELECT state FROM threads WHERE id=?), 'open'),
-                    COALESCE((SELECT msg_count FROM threads WHERE id=?), 0),
-                    COALESCE((SELECT created_at FROM threads WHERE id=?), ?),
-                    (SELECT closed_at FROM threads WHERE id=?))
+            VALUES (?, ?, ?, COALESCE((SELECT state FROM threads WHERE id=? AND room=?), 'open'),
+                    COALESCE((SELECT msg_count FROM threads WHERE id=? AND room=?), 0),
+                    COALESCE((SELECT created_at FROM threads WHERE id=? AND room=?), ?),
+                    (SELECT closed_at FROM threads WHERE id=? AND room=?))
             """,
-            (thread_id, room, title, thread_id, thread_id, thread_id, time.time(), thread_id),
+            (
+                thread_id,
+                room,
+                title,
+                thread_id,
+                room,
+                thread_id,
+                room,
+                thread_id,
+                room,
+                time.time(),
+                thread_id,
+                room,
+            ),
         )
 
     async def fetch_threads(self, room: str) -> list[dict]:
@@ -171,17 +226,27 @@ class Storage:
             for row in rows
         ]
 
-    async def get_thread_state(self, thread_id: str) -> str | None:
-        cursor = await self.db.execute("SELECT state FROM threads WHERE id=?", (thread_id,))
+    async def get_thread_state(self, thread_id: str, room: str) -> str | None:
+        cursor = await self.db.execute(
+            "SELECT state FROM threads WHERE id=? AND room=?", (thread_id, room)
+        )
         row = await cursor.fetchone()
         return str(row[0]) if row else None
 
-    async def update_thread_state(self, thread_id: str, state: str | ThreadState) -> None:
+    async def update_thread_state(
+        self, thread_id: str, state: str | ThreadState, room: str | None = None
+    ) -> None:
         value = state.value if isinstance(state, ThreadState) else state
         closed_at = time.time() if value == ThreadState.CLOSED.value else None
+        if room is None:
+            await self._execute(
+                "UPDATE threads SET state=?, closed_at=COALESCE(?, closed_at) WHERE id=?",
+                (value, closed_at, thread_id),
+            )
+            return
         await self._execute(
-            "UPDATE threads SET state=?, closed_at=COALESCE(?, closed_at) WHERE id=?",
-            (value, closed_at, thread_id),
+            "UPDATE threads SET state=?, closed_at=COALESCE(?, closed_at) WHERE id=? AND room=?",
+            (value, closed_at, thread_id, room),
         )
 
     async def fetch_terminal_threads(self) -> list[tuple[str, str]]:

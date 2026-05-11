@@ -34,6 +34,7 @@ import secrets
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+from urllib.request import Request
 
 import websockets
 from mcp.server.fastmcp import FastMCP
@@ -41,6 +42,16 @@ from mcp.server.fastmcp import FastMCP
 DEFAULT_RELAY_URL = "ws://localhost:8899"
 DEFAULT_CONNECT_TIMEOUT = 5.0
 DEFAULT_RESPONSE_TIMEOUT = 10.0
+RELAY_UNAVAILABLE_ERRORS = (
+    TimeoutError,
+    asyncio.TimeoutError,
+    OSError,
+    websockets.WebSocketException,
+)
+
+
+def agentrelay_home() -> Path:
+    return Path(os.getenv("AGENTRELAY_HOME") or os.getenv("HOME") or Path.home()).expanduser()
 
 
 def discover_token(token: str | None = None) -> str:
@@ -49,7 +60,7 @@ def discover_token(token: str | None = None) -> str:
         return token
     if env_token := os.getenv("AGENTRELAY_TOKEN"):
         return env_token
-    token_path = Path.home() / ".agentrelay" / "token"
+    token_path = agentrelay_home() / ".agentrelay" / "token"
     token_path.parent.mkdir(parents=True, exist_ok=True)
     if token_path.exists():
         return token_path.read_text().strip()
@@ -69,10 +80,7 @@ def _relay_url(url: str | None = None) -> str:
 
 
 def _ws_url(relay_url: str, token: str, agent: str, room: str) -> str:
-    return (
-        f"{_relay_url(relay_url)}/ws?token={quote(token)}"
-        f"&agent={quote(agent)}&room={quote(room)}"
-    )
+    return f"{_relay_url(relay_url)}/ws"
 
 
 def _json(data: Any) -> str:
@@ -116,6 +124,16 @@ class RelayClient:
             websockets.connect(_ws_url(self.relay_url, self.token, self.agent, room)),
             timeout=self.connect_timeout,
         )
+        await self._ws.send(
+            json.dumps(
+                {
+                    "type": "auth",
+                    "token": self.token,
+                    "agent": self.agent,
+                    "room": room,
+                }
+            )
+        )
         return self._ws
 
     async def _roundtrip(self, payload: dict[str, Any], *, room: str | None = None) -> dict[str, Any]:
@@ -138,11 +156,11 @@ class RelayClient:
         async with self._lock:
             try:
                 return await self._roundtrip(payload, room=room)
-            except (TimeoutError, OSError, websockets.WebSocketException) as first_error:
+            except RELAY_UNAVAILABLE_ERRORS as first_error:
                 await self.close()
                 try:
                     return await self._roundtrip(payload, room=room)
-                except (TimeoutError, OSError, websockets.WebSocketException) as second_error:
+                except RELAY_UNAVAILABLE_ERRORS as second_error:
                     await self.close()
                     return {
                         "error": "RELAY_UNAVAILABLE",
@@ -156,7 +174,7 @@ class RelayClient:
                 await ws.send(json.dumps({"type": "join", "room": room}))
                 self._active_room = room
                 return {"status": "joined", "room": room}
-            except (TimeoutError, OSError, websockets.WebSocketException) as exc:
+            except RELAY_UNAVAILABLE_ERRORS as exc:
                 await self.close()
                 return {"error": "RELAY_UNAVAILABLE", "detail": str(exc)}
 
@@ -211,13 +229,16 @@ class ClientPool:
         self._clients.clear()
 
 
-async def _get_json(url: str) -> Any:
+async def _get_json(url: str, token: str | None = None) -> Any:
     from urllib.request import urlopen
 
     http_url = url.replace("ws://", "http://", 1).replace("wss://", "https://", 1)
 
     def fetch() -> Any:
-        with urlopen(http_url, timeout=10) as response:  # noqa: S310 - local/admin configured URL
+        request = Request(http_url)
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
+        with urlopen(request, timeout=10) as response:  # noqa: S310 - local/admin configured URL
             return json.loads(response.read().decode("utf-8"))
 
     return await asyncio.to_thread(fetch)
@@ -296,19 +317,22 @@ def create_mcp_server(
     async def read_messages(limit: int = 20, room: str | None = None) -> str:
         """Read recent messages from a room."""
         active_room = room or default_room
-        data = await _get_json(f"{resolved_url}/rooms/{quote(active_room)}/history?limit={int(limit)}")
+        data = await _get_json(
+            f"{resolved_url}/rooms/{quote(active_room)}/history?limit={int(limit)}",
+            resolved_token,
+        )
         return _json(data)
 
     @mcp.tool()
     async def list_rooms() -> str:
         """List active rooms."""
-        data = await _get_json(f"{resolved_url}/rooms")
+        data = await _get_json(f"{resolved_url}/rooms", resolved_token)
         return _json(data)
 
     @mcp.tool()
     async def list_agents(room: str | None = None) -> str:
         """List connected agents, optionally filtered by room."""
-        data = await _get_json(f"{resolved_url}/agents")
+        data = await _get_json(f"{resolved_url}/agents", resolved_token)
         if room:
             data = [a for a in data if room in a.get("rooms", []) or a.get("room") == room]
         return _json(data)

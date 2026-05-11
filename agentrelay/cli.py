@@ -8,7 +8,6 @@ import logging
 import os
 import sys
 from pathlib import Path
-from urllib.parse import quote
 
 import uvicorn
 
@@ -93,12 +92,10 @@ async def _topic(args: argparse.Namespace) -> None:
     if not agents:
         raise ValueError("--agents must include at least one agent id")
     thread = args.thread or args.topic[:48]
-    url = (
-        f"{_normalize_ws_url(args.url)}/ws?token={quote(token)}"
-        f"&agent={quote(agent)}&room={quote(room)}"
-    )
+    url = f"{_normalize_ws_url(args.url)}/ws"
     payload = {"content": args.topic, "thread": thread, "mentions": agents}
     async with websockets.connect(url, open_timeout=10) as ws:
+        await ws.send(json.dumps({"type": "auth", "token": token, "agent": agent, "room": room}))
         await ws.send(json.dumps(payload))
         deadline = asyncio.get_running_loop().time() + args.timeout
         last = None

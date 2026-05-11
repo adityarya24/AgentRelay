@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from . import __version__
@@ -135,6 +135,19 @@ class Relay:
     def _auth_ok(self, token: str | None) -> bool:
         return bool(token and secrets.compare_digest(token, self.token))
 
+    async def _websocket_auth(self, ws: WebSocket) -> tuple[str, str] | None:
+        try:
+            raw = await asyncio.wait_for(ws.receive_json(), timeout=5)
+        except Exception:
+            await ws.close(code=1008, reason="auth required")
+            return None
+        if raw.get("type") != "auth" or not self._auth_ok(raw.get("token")):
+            await ws.close(code=1008, reason="invalid token")
+            return None
+        agent = str(raw.get("agent") or ws.query_params.get("agent") or "agent")
+        room = str(raw.get("room") or ws.query_params.get("room") or "general")
+        return agent, room
+
     def rooms(self) -> list[Room]:
         seen = set(self._ws) | {agent.room for agent in self._agents.values()}
         return [Room(id=room, name=room, agents=sorted(self._ws.get(room, {}))) for room in sorted(seen)]
@@ -237,7 +250,11 @@ class Relay:
             self.counters["messages_rejected"] += 1
             return await self._reject(sender, room, "MESSAGE_TOO_LARGE")
 
-        msg_type = MessageType(raw.get("type", "dm" if raw.get("target") else "text"))
+        try:
+            msg_type = MessageType(raw.get("type", "dm" if raw.get("target") else "text"))
+        except ValueError:
+            self.counters["messages_rejected"] += 1
+            return await self._reject(sender, room, "INVALID_MESSAGE_TYPE")
         target = raw.get("target")
         thread = raw.get("thread")
         if thread and len(str(thread)) > 128:
@@ -247,13 +264,13 @@ class Relay:
         if msg_type == MessageType.CLOSE:
             if not thread:
                 return await self._reject(sender, room, "THREAD_REQUIRED")
-            await self.storage.update_thread_state(str(thread), ThreadState.CLOSED)
+            await self.storage.update_thread_state(str(thread), ThreadState.CLOSED, room)
             self.governance.cleanup_thread(room, str(thread))
             await self._broadcast_system(room, f"thread closed: {thread}")
             return {"status": "closed", "thread": thread}
 
         if thread:
-            state = await self.storage.get_thread_state(str(thread))
+            state = await self.storage.get_thread_state(str(thread), room)
             if state in {ThreadState.CLOSING.value, ThreadState.CLOSED.value}:
                 self.counters["messages_rejected"] += 1
                 return await self._reject(sender, room, "THREAD_CLOSED", thread=str(thread))
@@ -285,15 +302,15 @@ class Relay:
         await self._send(sender, room, ack)
 
         if msg.thread:
-            state = await self.storage.get_thread_state(msg.thread)
+            state = await self.storage.get_thread_state(msg.thread, room)
             if state == ThreadState.OPEN.value:
-                await self.storage.update_thread_state(msg.thread, ThreadState.ACTIVE)
+                await self.storage.update_thread_state(msg.thread, ThreadState.ACTIVE, room)
             if self.governance.should_auto_close(room, msg.thread):
-                await self.storage.update_thread_state(msg.thread, ThreadState.CLOSING)
+                await self.storage.update_thread_state(msg.thread, ThreadState.CLOSING, room)
                 self.governance.cleanup_thread(room, msg.thread)
                 await self._broadcast_system(room, f"thread auto-closing: {msg.thread}")
             elif self.governance.should_timeout(room, msg.thread):
-                await self.storage.update_thread_state(msg.thread, ThreadState.CLOSING)
+                await self.storage.update_thread_state(msg.thread, ThreadState.CLOSING, room)
                 self.governance.cleanup_thread(room, msg.thread)
                 await self._broadcast_system(room, f"thread inactive: {msg.thread}")
 
@@ -318,13 +335,11 @@ class Relay:
         return payload
 
     async def ws_handler(self, ws: WebSocket) -> None:
-        token = ws.query_params.get("token")
-        agent = ws.query_params.get("agent") or "agent"
-        room = ws.query_params.get("room") or "general"
-        if not self._auth_ok(token):
-            await ws.close(code=1008, reason="invalid token")
-            return
         await ws.accept()
+        auth = await self._websocket_auth(ws)
+        if auth is None:
+            return
+        agent, room = auth
         await self.register(ws, agent, room)
         try:
             while True:
@@ -369,24 +384,41 @@ def create_app(relay: Relay | None = None) -> FastAPI:
     app = FastAPI(title="AgentRelay", version=__version__, lifespan=lifespan)
     app.state.relay = relay
 
+    def require_http_auth(
+        authorization: str | None = Header(default=None),
+        x_agentrelay_token: str | None = Header(default=None, alias="X-AgentRelay-Token"),
+    ) -> None:
+        bearer = None
+        if authorization:
+            scheme, _, value = authorization.partition(" ")
+            bearer = value if scheme.lower() == "bearer" and value else authorization
+        if relay._auth_ok(x_agentrelay_token or bearer):
+            return
+        raise HTTPException(status_code=401, detail="invalid token")
+
     @app.get("/")
     async def health():
         return {"status": "ok", "version": __version__, "agents": len(relay._agents)}
 
     @app.get("/rooms")
-    async def rooms():
+    async def rooms(_: None = Depends(require_http_auth)):
         return [room.model_dump() for room in relay.rooms()]
 
     @app.get("/rooms/{room}/history")
-    async def history(room: str, limit: int = Query(50, ge=1, le=500), after_seq: int = 0):
+    async def history(
+        room: str,
+        _: None = Depends(require_http_auth),
+        limit: int = Query(50, ge=1, le=500),
+        after_seq: int = 0,
+    ):
         return [msg.wire() for msg in await relay.storage.fetch_history(room, limit, after_seq)]
 
     @app.get("/agents")
-    async def agents():
+    async def agents(_: None = Depends(require_http_auth)):
         return [agent.model_dump() | {"rooms": sorted(relay._agent_rooms.get(agent.id, []))} for agent in relay._agents.values()]
 
     @app.get("/metrics")
-    async def metrics():
+    async def metrics(_: None = Depends(require_http_auth)):
         return {
             **relay.counters,
             "uptime_seconds": int(time.time() - relay.started_at),
