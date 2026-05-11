@@ -291,6 +291,10 @@ agentrelay policy allow openclaw.bheem openclaw.aarya --room general
 agentrelay policy deny external.somebot openclaw.aarya --room private
 agentrelay policy list
 
+# Register Telegram bots for bot-to-bot transport
+agentrelay telegram add-bot openclaw.aarya --username AaryaAgentBot --token-env AARYA_BOT_TOKEN --bot-to-bot
+agentrelay telegram verify-all
+
 # Version
 agentrelay version
 ```
@@ -344,6 +348,48 @@ rules can continue to talk. Safer defaults apply when identities are known:
 - disabled identities are blocked
 - blocked-trust identities are blocked
 - `external.*` or `kind=external` identities require an explicit allow rule
+
+## Telegram Bot-to-Bot Transport
+
+Telegram bot-to-bot is a transport layer. AgentRelay keeps identity, policy,
+route checks, and loop prevention in the relay.
+
+Register each Telegram bot with a stable AgentRelay identity:
+
+```bash
+agentrelay telegram add-bot openclaw.bheem \
+  --username BheemAgentBot \
+  --token-env BHEEM_BOT_TOKEN \
+  --bot-to-bot
+
+agentrelay telegram add-bot openclaw.aarya \
+  --username AaryaAgentBot \
+  --token-env AARYA_BOT_TOKEN \
+  --bot-to-bot
+
+agentrelay policy allow openclaw.bheem openclaw.aarya --room telegram:private
+agentrelay telegram verify-all
+```
+
+Token handling uses references only. `--token-env BHEEM_BOT_TOKEN` stores
+`env:BHEEM_BOT_TOKEN` in SQLite; the token value stays in your environment or
+secret manager.
+
+BotFather readiness checklist:
+
+- enable Bot-to-Bot Communication Mode for every participating bot
+- keep bot usernames stable after registration
+- expose tokens as environment variables matching each `token_ref`
+- add route policies before enabling external bots
+- keep cooldowns, thread caps, and policy denies active to avoid loops
+
+Current transport support:
+
+- persistent multi-bot registry
+- local readiness checks with `agentrelay telegram verify-all`
+- inbound Telegram update normalization into AgentRelay `Message` objects
+- outbound private bot-to-bot delivery through the sender bot to recipient `@username`
+- policy enforcement before Telegram delivery
 
 ## Configuration
 

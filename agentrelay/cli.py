@@ -12,7 +12,15 @@ from pathlib import Path
 import uvicorn
 
 from . import __version__
-from .models import Identity, IdentityKind, IdentityTransport, PolicyEffect, PolicyRule, TrustLevel
+from .models import (
+    Identity,
+    IdentityKind,
+    IdentityTransport,
+    PolicyEffect,
+    PolicyRule,
+    TelegramBotRegistration,
+    TrustLevel,
+)
 from .relay import create_app, default_db_path, ensure_token
 from .storage import Storage
 
@@ -255,6 +263,111 @@ def cmd_policy(args: argparse.Namespace) -> None:
         raise SystemExit(1) from exc
 
 
+def _telegram_bot_json(bot: TelegramBotRegistration) -> str:
+    return json.dumps(bot.model_dump(mode="json"), ensure_ascii=False)
+
+
+async def _telegram_add_bot(args: argparse.Namespace) -> None:
+    storage = await _identity_storage(args)
+    try:
+        token_ref = args.token_ref or f"env:{args.token_env}"
+        bot = TelegramBotRegistration(
+            identity_id=args.identity_id,
+            username=args.username.removeprefix("@"),
+            token_ref=token_ref,
+            bot_to_bot_enabled=args.bot_to_bot,
+            enabled=not args.disabled,
+        )
+        saved = await storage.upsert_telegram_bot(bot)
+        if await storage.get_identity(args.identity_id) is None:
+            identity = Identity(
+                id=args.identity_id,
+                display_name=args.identity_id,
+                kind=IdentityKind.EXTERNAL
+                if args.identity_id.startswith("external.")
+                else IdentityKind.VPS,
+                transport=IdentityTransport.TELEGRAM,
+                enabled=not args.identity_id.startswith("external."),
+                trust_level=TrustLevel.SANDBOX
+                if args.identity_id.startswith("external.")
+                else TrustLevel.TRUSTED,
+                secret_ref=token_ref,
+            )
+            await storage.upsert_identity(identity)
+        print(_telegram_bot_json(saved) if args.json else f"saved @{saved.username} -> {saved.identity_id}")
+    finally:
+        await storage.close()
+
+
+async def _telegram_list_bots(args: argparse.Namespace) -> None:
+    storage = await _identity_storage(args)
+    try:
+        bots = await storage.list_telegram_bots(include_disabled=args.all)
+        if args.json:
+            print(json.dumps([bot.model_dump(mode="json") for bot in bots], ensure_ascii=False))
+            return
+        for bot in bots:
+            status = "enabled" if bot.enabled else "disabled"
+            b2b = "bot-to-bot" if bot.bot_to_bot_enabled else "bot-to-bot-missing"
+            print(f"{bot.identity_id}\t@{bot.username}\t{bot.token_ref}\t{status}\t{b2b}")
+    finally:
+        await storage.close()
+
+
+async def _telegram_verify_all(args: argparse.Namespace) -> None:
+    storage = await _identity_storage(args)
+    try:
+        rows = []
+        for bot in await storage.list_telegram_bots(include_disabled=True):
+            checks = {
+                "identity_id": bot.identity_id,
+                "username": bot.username,
+                "enabled": bot.enabled,
+                "bot_to_bot_enabled": bot.bot_to_bot_enabled,
+                "token_ref": bot.token_ref,
+                "token_available": False,
+                "ready": False,
+                "issues": [],
+            }
+            if bot.token_ref.startswith("env:"):
+                env_name = bot.token_ref.split(":", 1)[1]
+                checks["token_available"] = bool(os.getenv(env_name))
+                if not checks["token_available"]:
+                    checks["issues"].append(f"missing env:{env_name}")
+            else:
+                checks["issues"].append("token_ref must be env:NAME for local verification")
+            if not bot.enabled:
+                checks["issues"].append("bot disabled")
+            if not bot.bot_to_bot_enabled:
+                checks["issues"].append("enable Bot-to-Bot Communication Mode in BotFather")
+            checks["ready"] = not checks["issues"]
+            rows.append(checks)
+        if args.json:
+            print(json.dumps(rows, ensure_ascii=False))
+            return
+        for row in rows:
+            verdict = "ready" if row["ready"] else "not-ready"
+            issues = ", ".join(row["issues"]) if row["issues"] else "-"
+            print(f"{row['identity_id']}\t@{row['username']}\t{verdict}\t{issues}")
+    finally:
+        await storage.close()
+
+
+def cmd_telegram(args: argparse.Namespace) -> None:
+    try:
+        if args.telegram_cmd == "add-bot":
+            asyncio.run(_telegram_add_bot(args))
+        elif args.telegram_cmd == "list-bots":
+            asyncio.run(_telegram_list_bots(args))
+        elif args.telegram_cmd == "verify-all":
+            asyncio.run(_telegram_verify_all(args))
+        else:
+            raise ValueError("missing telegram command")
+    except Exception as exc:
+        print(f"agentrelay telegram failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
 def _normalize_ws_url(url: str) -> str:
     base = (url or DEFAULT_URL).rstrip("/")
     if base.startswith("http://"):
@@ -406,6 +519,30 @@ def build_parser() -> argparse.ArgumentParser:
     policy_disable.add_argument("id")
     policy_disable.add_argument("--json", action="store_true")
     policy_disable.set_defaults(func=cmd_policy)
+
+    telegram = sub.add_parser("telegram", help="manage Telegram bot-to-bot transport")
+    telegram.add_argument("--db-path")
+    telegram_sub = telegram.add_subparsers(dest="telegram_cmd", required=True)
+
+    tg_add = telegram_sub.add_parser("add-bot", help="register a Telegram bot identity")
+    tg_add.add_argument("identity_id")
+    tg_add.add_argument("--username", required=True)
+    token_group = tg_add.add_mutually_exclusive_group(required=True)
+    token_group.add_argument("--token-env")
+    token_group.add_argument("--token-ref")
+    tg_add.add_argument("--bot-to-bot", action="store_true")
+    tg_add.add_argument("--disabled", action="store_true")
+    tg_add.add_argument("--json", action="store_true")
+    tg_add.set_defaults(func=cmd_telegram)
+
+    tg_list = telegram_sub.add_parser("list-bots", help="list registered Telegram bots")
+    tg_list.add_argument("--all", action="store_true", help="include disabled bots")
+    tg_list.add_argument("--json", action="store_true")
+    tg_list.set_defaults(func=cmd_telegram)
+
+    tg_verify = telegram_sub.add_parser("verify-all", help="check local Telegram readiness")
+    tg_verify.add_argument("--json", action="store_true")
+    tg_verify.set_defaults(func=cmd_telegram)
     return parser
 
 

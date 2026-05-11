@@ -123,6 +123,18 @@ class PolicyDecision(BaseModel):
     rule_id: str | None = None
 
 
+class TelegramBotRegistration(BaseModel):
+    identity_id: str
+    username: str
+    token_ref: str
+    bot_to_bot_enabled: bool = False
+    enabled: bool = True
+    verified_at: float | None = None
+    last_error: str | None = None
+    created_at: float = Field(default_factory=utc_timestamp)
+    updated_at: float = Field(default_factory=utc_timestamp)
+
+
 class GovernanceConfig(BaseModel):
     per_agent_thread_cap: int = 3
     per_thread_cap: int = 15

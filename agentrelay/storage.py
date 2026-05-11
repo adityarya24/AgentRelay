@@ -9,7 +9,15 @@ from typing import Any
 
 import aiosqlite
 
-from .models import Identity, Message, MessageType, PolicyRule, ThreadState, utc_timestamp
+from .models import (
+    Identity,
+    Message,
+    MessageType,
+    PolicyRule,
+    TelegramBotRegistration,
+    ThreadState,
+    utc_timestamp,
+)
 
 
 class Storage:
@@ -67,12 +75,24 @@ class Storage:
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS telegram_bots (
+                identity_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                token_ref TEXT NOT NULL,
+                bot_to_bot_enabled INTEGER NOT NULL DEFAULT 0,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                verified_at REAL,
+                last_error TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_msg_room_seq ON messages(room, seq);
             CREATE INDEX IF NOT EXISTS idx_msg_thread ON messages(thread);
             CREATE INDEX IF NOT EXISTS idx_msg_ts ON messages(ts);
             CREATE INDEX IF NOT EXISTS idx_identity_kind ON identities(kind);
             CREATE INDEX IF NOT EXISTS idx_identity_transport ON identities(transport);
             CREATE INDEX IF NOT EXISTS idx_policy_route ON policies(source, target, room);
+            CREATE INDEX IF NOT EXISTS idx_telegram_bot_username ON telegram_bots(username);
             """
         )
         await self._ensure_thread_schema()
@@ -446,6 +466,99 @@ class Storage:
             (int(enabled), utc_timestamp(), rule_id),
         )
         return await self.get_policy(rule_id)
+
+    @staticmethod
+    def _telegram_bot_from_row(row: tuple) -> TelegramBotRegistration:
+        return TelegramBotRegistration(
+            identity_id=row[0],
+            username=row[1],
+            token_ref=row[2],
+            bot_to_bot_enabled=bool(row[3]),
+            enabled=bool(row[4]),
+            verified_at=row[5],
+            last_error=row[6],
+            created_at=row[7],
+            updated_at=row[8],
+        )
+
+    async def upsert_telegram_bot(
+        self, bot: TelegramBotRegistration
+    ) -> TelegramBotRegistration:
+        now = utc_timestamp()
+        existing = await self.get_telegram_bot(bot.identity_id)
+        created_at = existing.created_at if existing else bot.created_at
+        saved = bot.model_copy(update={"created_at": created_at, "updated_at": now})
+        await self._execute(
+            """
+            INSERT INTO telegram_bots (
+                identity_id, username, token_ref, bot_to_bot_enabled, enabled,
+                verified_at, last_error, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(identity_id) DO UPDATE SET
+                username=excluded.username,
+                token_ref=excluded.token_ref,
+                bot_to_bot_enabled=excluded.bot_to_bot_enabled,
+                enabled=excluded.enabled,
+                verified_at=excluded.verified_at,
+                last_error=excluded.last_error,
+                updated_at=excluded.updated_at
+            """,
+            (
+                saved.identity_id,
+                saved.username,
+                saved.token_ref,
+                int(saved.bot_to_bot_enabled),
+                int(saved.enabled),
+                saved.verified_at,
+                saved.last_error,
+                saved.created_at,
+                saved.updated_at,
+            ),
+        )
+        return saved
+
+    async def get_telegram_bot(self, identity_id: str) -> TelegramBotRegistration | None:
+        cursor = await self.db.execute(
+            """
+            SELECT identity_id, username, token_ref, bot_to_bot_enabled, enabled,
+                   verified_at, last_error, created_at, updated_at
+            FROM telegram_bots
+            WHERE identity_id=?
+            """,
+            (identity_id,),
+        )
+        row = await cursor.fetchone()
+        return self._telegram_bot_from_row(row) if row else None
+
+    async def get_telegram_bot_by_username(
+        self, username: str
+    ) -> TelegramBotRegistration | None:
+        cursor = await self.db.execute(
+            """
+            SELECT identity_id, username, token_ref, bot_to_bot_enabled, enabled,
+                   verified_at, last_error, created_at, updated_at
+            FROM telegram_bots
+            WHERE lower(username)=lower(?)
+            """,
+            (username.removeprefix("@"),),
+        )
+        row = await cursor.fetchone()
+        return self._telegram_bot_from_row(row) if row else None
+
+    async def list_telegram_bots(
+        self, include_disabled: bool = False
+    ) -> list[TelegramBotRegistration]:
+        sql = """
+            SELECT identity_id, username, token_ref, bot_to_bot_enabled, enabled,
+                   verified_at, last_error, created_at, updated_at
+            FROM telegram_bots
+        """
+        if not include_disabled:
+            sql += " WHERE enabled=1"
+        sql += " ORDER BY identity_id"
+        cursor = await self.db.execute(sql)
+        return [self._telegram_bot_from_row(row) for row in await cursor.fetchall()]
 
     async def store_governance(self, state: dict) -> None:
         await self._execute(
