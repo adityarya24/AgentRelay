@@ -153,26 +153,33 @@ class TelegramBotRunner:
             raise
 
     async def poll_once(self) -> None:
+        bots = [bot for bot in await self.storage.list_telegram_bots() if bot.enabled]
+        await asyncio.gather(*(self._poll_bot(bot) for bot in bots), return_exceptions=True)
+
+    async def _poll_bot(self, bot) -> None:
         transport = TelegramTransport(self.storage, self.client)
-        for bot in await self.storage.list_telegram_bots():
-            if not bot.enabled:
-                continue
-            try:
-                token = transport._resolve_token(bot.token_ref)
-            except RuntimeError:
-                logger.warning("telegram bot token unavailable", extra={"identity_id": bot.identity_id})
-                continue
-            try:
-                updates = await self.client.get_updates(
+        try:
+            token = transport._resolve_token(bot.token_ref)
+        except RuntimeError:
+            logger.warning("telegram bot token unavailable", extra={"identity_id": bot.identity_id})
+            return
+        try:
+            updates = await asyncio.wait_for(
+                self.client.get_updates(
                     token,
                     offset=self._offsets.get(bot.identity_id),
                     timeout=self.update_timeout,
-                )
-            except Exception:
-                logger.exception("telegram getUpdates failed", extra={"identity_id": bot.identity_id})
-                continue
-            for update in updates:
-                await self._handle_update(transport, bot.identity_id, update)
+                ),
+                timeout=self.update_timeout + 10,
+            )
+        except TimeoutError:
+            logger.warning("telegram poll timeout", extra={"identity_id": bot.identity_id})
+            return
+        except Exception:
+            logger.exception("telegram getUpdates failed", extra={"identity_id": bot.identity_id})
+            return
+        for update in updates:
+            await self._handle_update(transport, bot.identity_id, update)
 
     async def _handle_update(
         self, transport: TelegramTransport, receiver_identity: str, update: dict

@@ -60,6 +60,8 @@ def discover_token(token: str | None = None) -> str:
         return token
     if env_token := os.getenv("AGENTRELAY_TOKEN"):
         return env_token
+    if token_file := os.getenv("AGENTRELAY_TOKEN_FILE"):
+        return Path(token_file).expanduser().read_text().strip()
     token_path = agentrelay_home() / ".agentrelay" / "token"
     token_path.parent.mkdir(parents=True, exist_ok=True)
     if token_path.exists():

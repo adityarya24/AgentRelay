@@ -226,6 +226,16 @@ def test_discover_token_reads_existing_local_token(monkeypatch: pytest.MonkeyPat
         assert discover_token() == "local-token"
 
 
+def test_discover_token_reads_token_file_env(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as td:
+        token_path = Path(td) / "token"
+        token_path.write_text("file-token\n")
+        monkeypatch.delenv("AGENTRELAY_TOKEN", raising=False)
+        monkeypatch.setenv("AGENTRELAY_TOKEN_FILE", str(token_path))
+
+        assert discover_token() == "file-token"
+
+
 def test_relay_basic_websocket_connection_for_mcp_client():
     with tempfile.TemporaryDirectory() as td:
         relay = Relay(token="test-token", db_path=str(Path(td) / "relay.db"))

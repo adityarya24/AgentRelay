@@ -65,7 +65,9 @@ def cmd_start(args: argparse.Namespace) -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     print(f"AgentRelay v{__version__} listening on {host}:{port}")
-    print(f"Token: {token}")
+    token_path = Path.home() / ".agentrelay" / "token"
+    print(f"Token file: {token_path}")
+    print("Token env:  AGENTRELAY_TOKEN")
     from .relay import Relay
 
     app = create_app(Relay(token=token, db_path=db_path))

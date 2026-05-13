@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -354,5 +356,122 @@ async def test_relay_sends_room_message_to_registered_telegram_group(monkeypatch
             assert result["status"] == "sent"
             assert result["delivered_to"] == 1
             assert client.sent == [("aarya-token", "-100123", "group-visible update")]
+        finally:
+            await relay.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_telegram_runner_polls_bots_concurrently(monkeypatch):
+    class SlowTelegramClient(FakeTelegramClient):
+        async def get_updates(
+            self, token: str, offset: int | None = None, timeout: int = 30
+        ) -> list[dict]:
+            self.update_calls.append((token, offset))
+            await asyncio.sleep(0.2)
+            return []
+
+    with tempfile.TemporaryDirectory() as td:
+        relay = Relay(token="test-token", db_path=str(Path(td) / "relay.db"))
+        client = SlowTelegramClient()
+        await relay.startup()
+        try:
+            await relay.storage.upsert_telegram_bot(
+                TelegramBotRegistration(
+                    identity_id="openclaw.aarya",
+                    username="AaryaAgentBot",
+                    token_ref="env:AARYA_BOT_TOKEN",
+                    bot_to_bot_enabled=True,
+                )
+            )
+            await relay.storage.upsert_telegram_bot(
+                TelegramBotRegistration(
+                    identity_id="openclaw.bheem",
+                    username="BheemAgentBot",
+                    token_ref="env:BHEEM_BOT_TOKEN",
+                    bot_to_bot_enabled=True,
+                )
+            )
+            monkeypatch.setenv("AARYA_BOT_TOKEN", "aarya-token")
+            monkeypatch.setenv("BHEEM_BOT_TOKEN", "bheem-token")
+
+            started = time.perf_counter()
+            await TelegramBotRunner(relay, client).poll_once()
+            elapsed = time.perf_counter() - started
+
+            assert sorted(client.update_calls) == [("aarya-token", None), ("bheem-token", None)]
+            assert elapsed < 0.35
+        finally:
+            await relay.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_skip_transport_blocked_for_regular_agent(monkeypatch):
+    with tempfile.TemporaryDirectory() as td:
+        relay = Relay(token="test-token", db_path=str(Path(td) / "relay.db"))
+        client = FakeTelegramClient()
+        relay.set_telegram_transport_client(client)
+        await relay.startup()
+        try:
+            await relay.storage.upsert_telegram_bot(
+                TelegramBotRegistration(
+                    identity_id="openclaw.aarya",
+                    username="AaryaAgentBot",
+                    token_ref="env:AARYA_BOT_TOKEN",
+                    bot_to_bot_enabled=True,
+                )
+            )
+            await relay.storage.upsert_telegram_group(
+                TelegramGroupRegistration(
+                    room="telegram:lab",
+                    chat_id="-100123",
+                    title="AgentRelay Lab",
+                )
+            )
+            monkeypatch.setenv("AARYA_BOT_TOKEN", "aarya-token")
+            result = await relay.process(
+                {"content": "group-visible update", "skip_transport_delivery": True},
+                "openclaw.aarya",
+                "telegram:lab",
+            )
+            assert result["status"] == "sent"
+            assert result["delivered_to"] == 1
+            # Telegram delivery should still happen because sender is not telegram./system
+            assert client.sent == [("aarya-token", "-100123", "group-visible update")]
+        finally:
+            await relay.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_skip_transport_blocked_for_system_like_agent(monkeypatch):
+    with tempfile.TemporaryDirectory() as td:
+        relay = Relay(token="test-token", db_path=str(Path(td) / "relay.db"))
+        client = FakeTelegramClient()
+        relay.set_telegram_transport_client(client)
+        await relay.startup()
+        try:
+            await relay.storage.upsert_telegram_bot(
+                TelegramBotRegistration(
+                    identity_id="systematic",
+                    username="SystematicBot",
+                    token_ref="env:SYSTEMATIC_BOT_TOKEN",
+                    bot_to_bot_enabled=True,
+                )
+            )
+            await relay.storage.upsert_telegram_group(
+                TelegramGroupRegistration(
+                    room="telegram:lab",
+                    chat_id="-100123",
+                    title="AgentRelay Lab",
+                )
+            )
+            monkeypatch.setenv("SYSTEMATIC_BOT_TOKEN", "systematic-token")
+            result = await relay.process(
+                {"content": "still visible", "skip_transport_delivery": True},
+                "systematic",
+                "telegram:lab",
+            )
+            assert result["status"] == "sent"
+            assert result["delivered_to"] == 1
+            assert client.sent == [("systematic-token", "-100123", "still visible")]
         finally:
             await relay.shutdown()

@@ -104,6 +104,21 @@ async def test_telegram_history_discuss_and_close(bot: TelegramBot, relay: Relay
     await relay.storage.close()
 
 
+@pytest.mark.asyncio
+async def test_telegram_close_is_room_scoped(bot: TelegramBot, relay: Relay):
+    await relay.storage.init()
+    await relay.storage.store_thread("shared", "general", "Shared general")
+    await relay.storage.store_thread("shared", "ops", "Shared ops")
+
+    update = FakeUpdate()
+    await bot.cmd_close(update, fake_context("shared", "general"))
+
+    assert await relay.storage.get_thread_state("shared", "general") == "closed"
+    assert await relay.storage.get_thread_state("shared", "ops") == "open"
+    assert "Closed thread shared in general" in "\n".join(update.message.replies)
+    await relay.storage.close()
+
+
 def test_relay_starts_telegram_task_when_env_configured(monkeypatch: pytest.MonkeyPatch, relay: Relay):
     created = []
 

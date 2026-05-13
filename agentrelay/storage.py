@@ -290,17 +290,9 @@ class Storage:
         row = await cursor.fetchone()
         return str(row[0]) if row else None
 
-    async def update_thread_state(
-        self, thread_id: str, state: str | ThreadState, room: str | None = None
-    ) -> None:
+    async def update_thread_state(self, thread_id: str, state: str | ThreadState, room: str) -> None:
         value = state.value if isinstance(state, ThreadState) else state
         closed_at = time.time() if value == ThreadState.CLOSED.value else None
-        if room is None:
-            await self._execute(
-                "UPDATE threads SET state=?, closed_at=COALESCE(?, closed_at) WHERE id=?",
-                (value, closed_at, thread_id),
-            )
-            return
         await self._execute(
             "UPDATE threads SET state=?, closed_at=COALESCE(?, closed_at) WHERE id=? AND room=?",
             (value, closed_at, thread_id, room),
@@ -662,7 +654,17 @@ class Storage:
     async def cleanup(self, ttl_hours: int = 24) -> int:
         cutoff = time.time() - ttl_hours * 3600
         cursor = await self._execute("DELETE FROM messages WHERE ts < ?", (cutoff,))
-        return int(cursor.rowcount or 0)
+        removed = int(cursor.rowcount or 0)
+        await self._execute(
+            """
+            DELETE FROM threads
+            WHERE state = 'closed'
+            AND closed_at < ?
+            AND id NOT IN (SELECT DISTINCT thread FROM messages WHERE thread IS NOT NULL)
+            """,
+            (cutoff,),
+        )
+        return removed
 
     async def close(self) -> None:
         if self._db is None:

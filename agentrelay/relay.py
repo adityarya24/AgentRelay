@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from . import __version__
@@ -35,6 +35,8 @@ def ensure_token(token: str | None = None) -> str:
         return token
     if env_token := os.getenv("AGENTRELAY_TOKEN"):
         return env_token
+    if token_file := os.getenv("AGENTRELAY_TOKEN_FILE"):
+        return Path(token_file).expanduser().read_text().strip()
     token_path = Path.home() / ".agentrelay" / "token"
     token_path.parent.mkdir(parents=True, exist_ok=True)
     if token_path.exists():
@@ -66,6 +68,7 @@ class Relay:
         self._room_locks: dict[str, asyncio.Lock] = {}
         self._locks_lock = asyncio.Lock()
         self._tasks: list[asyncio.Task] = []
+        self._auth_failures: dict[str, list[float]] = defaultdict(list)
         self._tg_hook: TokenHook | None = None
         self._telegram_transport_client: TelegramClient | None = None
         self.counters: dict[str, int] = {
@@ -144,18 +147,40 @@ class Relay:
                 self._room_locks[room] = lock
             return lock
 
+    def _check_auth_rate(self, ip: str) -> bool:
+        now = time.time()
+        failures = self._auth_failures.get(ip, [])
+        failures = [t for t in failures if now - t < 300]
+        self._auth_failures[ip] = failures
+        if len(failures) >= 10:
+            return False
+        return True
+
+    def _record_auth_failure(self, ip: str) -> None:
+        self._auth_failures.setdefault(ip, []).append(time.time())
+
+    def _clear_auth_failures(self, ip: str) -> None:
+        self._auth_failures.pop(ip, None)
+
     def _auth_ok(self, token: str | None) -> bool:
         return bool(token and secrets.compare_digest(token, self.token))
 
     async def _websocket_auth(self, ws: WebSocket) -> tuple[str, str] | None:
+        client_ip = getattr(getattr(ws, "client", None), "host", None) or "unknown"
+        if not self._check_auth_rate(client_ip):
+            await ws.close(code=1008, reason="rate limited")
+            return None
         try:
             raw = await asyncio.wait_for(ws.receive_json(), timeout=5)
         except Exception:
+            self._record_auth_failure(client_ip)
             await ws.close(code=1008, reason="auth required")
             return None
         if raw.get("type") != "auth" or not self._auth_ok(raw.get("token")):
+            self._record_auth_failure(client_ip)
             await ws.close(code=1008, reason="invalid token")
             return None
+        self._clear_auth_failures(client_ip)
         agent = str(raw.get("agent") or ws.query_params.get("agent") or "agent")
         room = str(raw.get("room") or ws.query_params.get("room") or "general")
         return agent, room
@@ -377,7 +402,9 @@ class Relay:
                 return await self._reject(sender, room, error or "GOVERNANCE_BLOCK", retry_after, msg.thread)
             self.governance.record(sender, room, msg.thread)
 
-        skip_transport_delivery = bool(raw.get("skip_transport_delivery"))
+        skip_transport_delivery = bool(raw.get("skip_transport_delivery")) and (
+            sender == "system" or sender.startswith("telegram.")
+        )
         await self.storage.store_message(msg)
         if msg.target:
             delivered = await self._send_dm(msg.target, msg)
@@ -477,15 +504,21 @@ def create_app(relay: Relay | None = None) -> FastAPI:
     app.state.relay = relay
 
     def require_http_auth(
+        request: Request,
         authorization: str | None = Header(default=None),
         x_agentrelay_token: str | None = Header(default=None, alias="X-AgentRelay-Token"),
     ) -> None:
+        client_ip = request.client.host if request.client else "unknown"
+        if not relay._check_auth_rate(client_ip):
+            raise HTTPException(status_code=429, detail="rate limited")
         bearer = None
         if authorization:
             scheme, _, value = authorization.partition(" ")
             bearer = value if scheme.lower() == "bearer" and value else authorization
         if relay._auth_ok(x_agentrelay_token or bearer):
+            relay._clear_auth_failures(client_ip)
             return
+        relay._record_auth_failure(client_ip)
         raise HTTPException(status_code=401, detail="invalid token")
 
     @app.get("/")

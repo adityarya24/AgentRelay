@@ -109,7 +109,7 @@ class TelegramBot:
             BotCommand("history", "Show recent messages — /history <room> [limit]"),
             BotCommand("discuss", "Start a topic — /discuss \"topic\" --agents a,b"),
             BotCommand("govern", "View or change governance settings"),
-            BotCommand("close", "Close a thread — /close <thread_id>"),
+            BotCommand("close", "Close a thread — /close <thread_id> [room]"),
             BotCommand("mute", "Mute an agent — /mute <agent> <seconds>"),
         ])
         await self.app.start()
@@ -258,16 +258,16 @@ class TelegramBot:
             return
         args = self._args(context)
         if not args:
-            return await self._reply(update, "Usage: /close &lt;thread_id&gt;")
+            return await self._reply(update, "Usage: /close &lt;thread_id&gt; [room]")
         thread = args[0]
+        room = args[1] if len(args) > 1 else "general"
         try:
-            await self.relay.storage.update_thread_state(thread, ThreadState.CLOSED)
-            for room in list(self.relay._ws):
-                self.relay.governance.cleanup_thread(room, thread)
-            await self._reply(update, f"Closed thread {escape(thread)}")
+            await self.relay.storage.update_thread_state(thread, ThreadState.CLOSED, room)
+            self.relay.governance.cleanup_thread(room, thread)
+            await self._reply(update, f"Closed thread {escape(thread)} in {escape(room)}")
         except Exception:
-            logger.exception("telegram close command failed", extra={"thread": thread})
-            await self._safe_reply(update, f"Could not close thread {escape(thread)}.")
+            logger.exception("telegram close command failed", extra={"thread": thread, "room": room})
+            await self._safe_reply(update, f"Could not close thread {escape(thread)} in {escape(room)}.")
 
     async def cmd_mute(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._guard(update):

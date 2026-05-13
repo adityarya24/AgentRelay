@@ -103,6 +103,31 @@ async def test_policy_explicit_deny_wins_over_allow():
             await storage.close()
 
 
+@pytest.mark.asyncio
+async def test_policy_allow_required_respects_room_scope():
+    with tempfile.TemporaryDirectory() as td:
+        storage = Storage(str(Path(td) / "relay.db"))
+        await storage.init()
+        try:
+            await storage.upsert_policy(
+                PolicyRule(
+                    id="allow-private",
+                    source="openclaw.bheem",
+                    target="openclaw.aarya",
+                    room="private",
+                    effect=PolicyEffect.ALLOW,
+                )
+            )
+
+            decision = await PolicyEngine(storage).evaluate(
+                "openclaw.bheem", "openclaw.aarya", "general"
+            )
+            assert decision.allowed is True
+            assert decision.reason == "DEFAULT_ALLOW"
+        finally:
+            await storage.close()
+
+
 def test_policy_cli_adds_and_lists_room_scoped_rule(capsys):
     with tempfile.TemporaryDirectory() as td:
         db_path = str(Path(td) / "relay.db")
@@ -158,3 +183,5 @@ async def test_relay_blocks_dm_when_policy_denies_target_route():
             assert await relay.storage.fetch_history("general") == []
         finally:
             await relay.shutdown()
+
+

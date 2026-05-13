@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import tempfile
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from agentrelay.governance import GovernanceEngine
 from agentrelay.models import GovernanceConfig, Message
-from agentrelay.relay import Relay, create_app
+from agentrelay.relay import Relay, create_app, ensure_token
 from agentrelay.storage import Storage
 
 
@@ -17,6 +18,16 @@ def auth_ws(ws, agent: str, room: str = "general") -> None:
 
 
 AUTH_HEADERS = {"Authorization": "Bearer test-token"}
+
+
+def test_ensure_token_reads_token_file_env(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as td:
+        token_path = Path(td) / "token"
+        token_path.write_text("file-token\n")
+        monkeypatch.delenv("AGENTRELAY_TOKEN", raising=False)
+        monkeypatch.setenv("AGENTRELAY_TOKEN_FILE", str(token_path))
+
+        assert ensure_token() == "file-token"
 
 
 @pytest.mark.asyncio
@@ -96,3 +107,74 @@ def test_invalid_token_rejected():
                 with client.websocket_connect("/ws") as ws:
                     ws.send_json({"type": "auth", "token": "bad", "agent": "a", "room": "general"})
                     ws.receive_json()
+
+
+def test_ws_auth_rate_limit():
+    with tempfile.TemporaryDirectory() as td:
+        relay = Relay(token="test-token", db_path=str(Path(td) / "relay.db"))
+        app = create_app(relay)
+        with TestClient(app) as client:
+            for i in range(10):
+                with pytest.raises(Exception):
+                    with client.websocket_connect("/ws") as ws:
+                        ws.send_json({"type": "auth", "token": "bad", "agent": "a", "room": "general"})
+                        ws.receive_json()
+            # 11th attempt should be rate limited immediately
+            with pytest.raises(Exception):
+                with client.websocket_connect("/ws") as ws:
+                    ws.send_json({"type": "auth", "token": "bad", "agent": "a", "room": "general"})
+                    ws.receive_json()
+            assert len(relay._auth_failures.get("testclient", [])) >= 10
+
+
+def test_http_auth_rate_limit():
+    with tempfile.TemporaryDirectory() as td:
+        relay = Relay(token="test-token", db_path=str(Path(td) / "relay.db"))
+        app = create_app(relay)
+        with TestClient(app) as client:
+            for _ in range(10):
+                response = client.get("/rooms", headers={"Authorization": "Bearer bad"})
+                assert response.status_code == 401
+
+            response = client.get("/rooms", headers={"Authorization": "Bearer bad"})
+            assert response.status_code == 429
+
+            relay._auth_failures["testclient"] = []
+            response = client.get("/rooms", headers=AUTH_HEADERS)
+            assert response.status_code == 200
+            assert "testclient" not in relay._auth_failures
+
+
+@pytest.mark.asyncio
+async def test_cleanup_removes_orphan_closed_threads():
+    with tempfile.TemporaryDirectory() as td:
+        storage = Storage(str(Path(td) / "relay.db"))
+        await storage.init()
+        try:
+            await storage.store_thread("orphan", "general", "Orphan thread")
+            await storage.update_thread_state("orphan", "closed", "general")
+            await asyncio.sleep(0.1)
+            removed = await storage.cleanup(ttl_hours=0)
+            assert removed == 0
+            state = await storage.get_thread_state("orphan", "general")
+            assert state is None
+        finally:
+            await storage.close()
+
+
+def test_start_does_not_print_token(capsys, monkeypatch):
+    from agentrelay.cli import cmd_start
+    import argparse
+    monkeypatch.setenv("AGENTRELAY_TOKEN", "test-token")
+    args = argparse.Namespace(
+        host=None, port=None, token=None,
+        telegram_token=None, telegram_chat=None, telegram_transport=False,
+        db_path=None, config=None,
+    )
+    with pytest.raises(SystemExit):
+        cmd_start(args)
+    captured = capsys.readouterr()
+    assert "Token: sk_" not in captured.out
+    assert "Token: test-token" not in captured.out
+    assert "Token file:" in captured.out
+    assert "Token env:" in captured.out

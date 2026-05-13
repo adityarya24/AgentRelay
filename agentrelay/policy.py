@@ -35,7 +35,7 @@ class PolicyEngine:
         if allow:
             return PolicyDecision(allowed=True, reason="POLICY_ALLOW", rule_id=allow.id)
 
-        if self._allow_required(source, target, source_identity, target_identity, rules):
+        if self._allow_required(source, target, room, source_identity, target_identity, rules):
             return PolicyDecision(allowed=False, reason="ALLOW_REQUIRED")
 
         return PolicyDecision(allowed=True, reason="DEFAULT_ALLOW")
@@ -60,6 +60,7 @@ class PolicyEngine:
         self,
         source: str,
         target: str,
+        room: str,
         source_identity: Identity | None,
         target_identity: Identity | None,
         rules: list[PolicyRule],
@@ -70,6 +71,7 @@ class PolicyEngine:
             rule.effect == PolicyEffect.ALLOW
             and self._matches(rule.source, source)
             and self._matches(rule.target, target)
+            and self._matches(rule.room, room)
             for rule in rules
         )
 

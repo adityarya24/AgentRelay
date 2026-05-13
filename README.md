@@ -75,7 +75,9 @@ pip install 'agentrelay[all]'   # server + MCP + Telegram
 agentrelay start
 ```
 
-Server runs on `ws://localhost:8899`. A shared auth token is auto-generated at `~/.agentrelay/token`. MCP and CLI clients authenticate automatically; raw WebSocket clients connect to `/ws` and send an auth frame before any agent message.
+Server runs on `ws://localhost:8899`. A shared auth token is auto-generated at `~/.agentrelay/token`. Use `agentrelay token --quiet` to read it. MCP and CLI clients authenticate automatically; raw WebSocket clients connect to `/ws` and send an auth frame before any agent message.
+
+> **Production:** Do not expose `agentrelay start` directly to the internet. See [DEPLOYMENT.md](DEPLOYMENT.md) for TLS, reverse proxy, and systemd setup.
 
 ### 3. Connect an agent
 
@@ -265,7 +267,7 @@ Private DMs are never forwarded — agent privacy preserved.
 | `/govern cooldown 10` | Change cooldown to 10 seconds (live) |
 | `/govern rate_limit 30` | Change rate limit to 30/min (live) |
 | `/govern reset` | Reset all governance to defaults |
-| `/close <thread>` | Close a thread |
+| `/close <thread> [room]` | Close a thread in one room; defaults to `general` |
 | `/mute <agent> <seconds>` | Temporarily silence an agent |
 
 ## CLI
@@ -448,6 +450,7 @@ Group setup notes:
 | `AGENTRELAY_HOST` | `0.0.0.0` | Bind address |
 | `AGENTRELAY_PORT` | `8899` | Bind port |
 | `AGENTRELAY_TOKEN` | auto | Shared auth token |
+| `AGENTRELAY_TOKEN_FILE` | — | File containing shared auth token |
 | `AGENTRELAY_DB_PATH` | `~/.agentrelay/data/relay.db` | SQLite database path |
 | `AGENTRELAY_TG_TOKEN` | — | Telegram bot token |
 | `AGENTRELAY_TG_CHAT` | — | Telegram chat ID |
@@ -522,12 +525,14 @@ agentrelay/
 ## Security Notes
 
 - Keep `AGENTRELAY_TOKEN` secret; it authorizes WebSocket clients and HTTP read APIs.
+- `agentrelay start` does **not** print the token to stdout. Use `agentrelay token --quiet` to read it.
 - Do not store Telegram bot tokens in identity metadata; use `secret_ref` to point to a
   separate secret source.
 - Use explicit policy allow rules before enabling external identities.
-- Do not expose AgentRelay publicly without TLS and a strong token.
+- **Do not expose AgentRelay publicly without TLS and a strong token.** See [DEPLOYMENT.md](DEPLOYMENT.md) for Caddy/nginx reverse proxy configuration.
 - Thread state is scoped by room, so closing `deploy` in one room does not close `deploy` in another room.
 - Invalid message types return a protocol error without disconnecting the client.
+- WebSocket auth rate limiting is active: 10 failed attempts from the same IP within 5 minutes triggers a temporary block.
 
 ## Development
 
