@@ -44,24 +44,24 @@ def test_telegram_bot_registry_roundtrip_and_cli(capsys):
                 "--db-path",
                 db_path,
                 "add-bot",
-                "openclaw.aarya",
+                "acme.alice",
                 "--username",
-                "AaryaAgentBot",
+                "AliceAgentBot",
                 "--token-env",
-                "AARYA_BOT_TOKEN",
+                "ALICE_BOT_TOKEN",
                 "--bot-to-bot",
                 "--json",
             ]
         )
         saved = json.loads(capsys.readouterr().out)
-        assert saved["identity_id"] == "openclaw.aarya"
-        assert saved["username"] == "AaryaAgentBot"
-        assert saved["token_ref"] == "env:AARYA_BOT_TOKEN"
+        assert saved["identity_id"] == "acme.alice"
+        assert saved["username"] == "AliceAgentBot"
+        assert saved["token_ref"] == "env:ALICE_BOT_TOKEN"
         assert saved["bot_to_bot_enabled"] is True
 
         main(["telegram", "--db-path", db_path, "list-bots", "--json"])
         listed = json.loads(capsys.readouterr().out)
-        assert [bot["identity_id"] for bot in listed] == ["openclaw.aarya"]
+        assert [bot["identity_id"] for bot in listed] == ["acme.alice"]
 
         main(
             [
@@ -94,29 +94,29 @@ async def test_telegram_transport_sends_private_bot_to_bot_message(monkeypatch):
         try:
             await storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.bheem",
-                    username="BheemAgentBot",
-                    token_ref="env:BHEEM_BOT_TOKEN",
+                    identity_id="acme.bob",
+                    username="BobAgentBot",
+                    token_ref="env:BOB_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
             await storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.aarya",
-                    username="AaryaAgentBot",
-                    token_ref="env:AARYA_BOT_TOKEN",
+                    identity_id="acme.alice",
+                    username="AliceAgentBot",
+                    token_ref="env:ALICE_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
-            monkeypatch.setenv("BHEEM_BOT_TOKEN", "bheem-token")
+            monkeypatch.setenv("BOB_BOT_TOKEN", "bob-token")
             client = FakeTelegramClient()
             result = await TelegramTransport(storage, client).send_private(
-                "openclaw.bheem",
-                "openclaw.aarya",
+                "acme.bob",
+                "acme.alice",
                 "handoff ready",
             )
             assert result["status"] == "sent"
-            assert client.sent == [("bheem-token", "@AaryaAgentBot", "handoff ready")]
+            assert client.sent == [("bob-token", "@AliceAgentBot", "handoff ready")]
         finally:
             await storage.close()
 
@@ -129,34 +129,34 @@ async def test_telegram_transport_blocks_policy_before_delivery(monkeypatch):
         try:
             await storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.bheem",
-                    username="BheemAgentBot",
-                    token_ref="env:BHEEM_BOT_TOKEN",
+                    identity_id="acme.bob",
+                    username="BobAgentBot",
+                    token_ref="env:BOB_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
             await storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.aarya",
-                    username="AaryaAgentBot",
-                    token_ref="env:AARYA_BOT_TOKEN",
+                    identity_id="acme.alice",
+                    username="AliceAgentBot",
+                    token_ref="env:ALICE_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
             await storage.upsert_policy(
                 PolicyRule(
                     id="deny-telegram",
-                    source="openclaw.bheem",
-                    target="openclaw.aarya",
+                    source="acme.bob",
+                    target="acme.alice",
                     room="telegram:private",
                     effect=PolicyEffect.DENY,
                 )
             )
-            monkeypatch.setenv("BHEEM_BOT_TOKEN", "bheem-token")
+            monkeypatch.setenv("BOB_BOT_TOKEN", "bob-token")
             client = FakeTelegramClient()
             result = await TelegramTransport(storage, client).send_private(
-                "openclaw.bheem",
-                "openclaw.aarya",
+                "acme.bob",
+                "acme.alice",
                 "blocked",
             )
             assert result["status"] == "blocked"
@@ -174,25 +174,25 @@ async def test_telegram_inbound_update_normalizes_registered_bot_sender():
         try:
             await storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.bheem",
-                    username="BheemAgentBot",
-                    token_ref="env:BHEEM_BOT_TOKEN",
+                    identity_id="acme.bob",
+                    username="BobAgentBot",
+                    token_ref="env:BOB_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
             msg = await TelegramTransport(storage, FakeTelegramClient()).normalize_update(
-                "openclaw.aarya",
+                "acme.alice",
                 {
                     "message": {
                         "message_id": 7,
                         "text": "status?",
-                        "from": {"is_bot": True, "username": "BheemAgentBot"},
+                        "from": {"is_bot": True, "username": "BobAgentBot"},
                         "chat": {"id": 1234, "type": "private"},
                     }
                 },
             )
-            assert msg.sender == "openclaw.bheem"
-            assert msg.target == "openclaw.aarya"
+            assert msg.sender == "acme.bob"
+            assert msg.target == "acme.alice"
             assert msg.room == "telegram:private"
             assert msg.content == "status?"
         finally:
@@ -207,9 +207,9 @@ async def test_telegram_group_update_normalizes_to_registered_room():
         try:
             await storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.bheem",
-                    username="BheemAgentBot",
-                    token_ref="env:BHEEM_BOT_TOKEN",
+                    identity_id="acme.bob",
+                    username="BobAgentBot",
+                    token_ref="env:BOB_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
@@ -221,17 +221,17 @@ async def test_telegram_group_update_normalizes_to_registered_room():
                 )
             )
             msg = await TelegramTransport(storage, FakeTelegramClient()).normalize_update(
-                "openclaw.aarya",
+                "acme.alice",
                 {
                     "message": {
                         "message_id": 8,
                         "text": "review this",
-                        "from": {"is_bot": True, "username": "BheemAgentBot"},
+                        "from": {"is_bot": True, "username": "BobAgentBot"},
                         "chat": {"id": -100123, "type": "supergroup", "title": "AgentRelay Lab"},
                     }
                 },
             )
-            assert msg.sender == "openclaw.bheem"
+            assert msg.sender == "acme.bob"
             assert msg.target is None
             assert msg.room == "telegram:lab"
             assert msg.content == "review this"
@@ -250,7 +250,7 @@ async def test_telegram_runner_polls_registered_bots_into_relay_without_echo(mon
                 "message": {
                     "message_id": 7,
                     "text": "status?",
-                    "from": {"is_bot": True, "username": "BheemAgentBot"},
+                    "from": {"is_bot": True, "username": "BobAgentBot"},
                     "chat": {"id": 1234, "type": "private"},
                 },
             }
@@ -259,29 +259,29 @@ async def test_telegram_runner_polls_registered_bots_into_relay_without_echo(mon
         try:
             await relay.storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.aarya",
-                    username="AaryaAgentBot",
-                    token_ref="env:AARYA_BOT_TOKEN",
+                    identity_id="acme.alice",
+                    username="AliceAgentBot",
+                    token_ref="env:ALICE_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
             await relay.storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.bheem",
-                    username="BheemAgentBot",
-                    token_ref="env:BHEEM_BOT_TOKEN",
+                    identity_id="acme.bob",
+                    username="BobAgentBot",
+                    token_ref="env:BOB_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
-            monkeypatch.setenv("AARYA_BOT_TOKEN", "aarya-token")
-            monkeypatch.setenv("BHEEM_BOT_TOKEN", "bheem-token")
+            monkeypatch.setenv("ALICE_BOT_TOKEN", "alice-token")
+            monkeypatch.setenv("BOB_BOT_TOKEN", "bob-token")
             await TelegramBotRunner(relay, client).poll_once()
 
             history = await relay.storage.fetch_history("telegram:private")
             assert [msg.content for msg in history] == ["status?"]
-            assert history[0].sender == "openclaw.bheem"
-            assert history[0].target == "openclaw.aarya"
-            assert client.update_calls == [("aarya-token", None), ("bheem-token", None)]
+            assert history[0].sender == "acme.bob"
+            assert history[0].target == "acme.alice"
+            assert client.update_calls == [("alice-token", None), ("bob-token", None)]
             assert client.sent == []
         finally:
             await relay.shutdown()
@@ -297,29 +297,29 @@ async def test_relay_sends_outbound_dm_to_registered_telegram_bot(monkeypatch):
         try:
             await relay.storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.aarya",
-                    username="AaryaAgentBot",
-                    token_ref="env:AARYA_BOT_TOKEN",
+                    identity_id="acme.alice",
+                    username="AliceAgentBot",
+                    token_ref="env:ALICE_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
             await relay.storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.bheem",
-                    username="BheemAgentBot",
-                    token_ref="env:BHEEM_BOT_TOKEN",
+                    identity_id="acme.bob",
+                    username="BobAgentBot",
+                    token_ref="env:BOB_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
-            monkeypatch.setenv("AARYA_BOT_TOKEN", "aarya-token")
+            monkeypatch.setenv("ALICE_BOT_TOKEN", "alice-token")
             result = await relay.process(
-                {"content": "report ready", "target": "openclaw.bheem"},
-                "openclaw.aarya",
+                {"content": "report ready", "target": "acme.bob"},
+                "acme.alice",
                 "general",
             )
             assert result["status"] == "sent"
             assert result["delivered_to"] == 1
-            assert client.sent == [("aarya-token", "@BheemAgentBot", "report ready")]
+            assert client.sent == [("alice-token", "@BobAgentBot", "report ready")]
         finally:
             await relay.shutdown()
 
@@ -334,9 +334,9 @@ async def test_relay_sends_room_message_to_registered_telegram_group(monkeypatch
         try:
             await relay.storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.aarya",
-                    username="AaryaAgentBot",
-                    token_ref="env:AARYA_BOT_TOKEN",
+                    identity_id="acme.alice",
+                    username="AliceAgentBot",
+                    token_ref="env:ALICE_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
@@ -347,15 +347,15 @@ async def test_relay_sends_room_message_to_registered_telegram_group(monkeypatch
                     title="AgentRelay Lab",
                 )
             )
-            monkeypatch.setenv("AARYA_BOT_TOKEN", "aarya-token")
+            monkeypatch.setenv("ALICE_BOT_TOKEN", "alice-token")
             result = await relay.process(
                 {"content": "group-visible update"},
-                "openclaw.aarya",
+                "acme.alice",
                 "telegram:lab",
             )
             assert result["status"] == "sent"
             assert result["delivered_to"] == 1
-            assert client.sent == [("aarya-token", "-100123", "group-visible update")]
+            assert client.sent == [("alice-token", "-100123", "group-visible update")]
         finally:
             await relay.shutdown()
 
@@ -377,28 +377,28 @@ async def test_telegram_runner_polls_bots_concurrently(monkeypatch):
         try:
             await relay.storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.aarya",
-                    username="AaryaAgentBot",
-                    token_ref="env:AARYA_BOT_TOKEN",
+                    identity_id="acme.alice",
+                    username="AliceAgentBot",
+                    token_ref="env:ALICE_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
             await relay.storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.bheem",
-                    username="BheemAgentBot",
-                    token_ref="env:BHEEM_BOT_TOKEN",
+                    identity_id="acme.bob",
+                    username="BobAgentBot",
+                    token_ref="env:BOB_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
-            monkeypatch.setenv("AARYA_BOT_TOKEN", "aarya-token")
-            monkeypatch.setenv("BHEEM_BOT_TOKEN", "bheem-token")
+            monkeypatch.setenv("ALICE_BOT_TOKEN", "alice-token")
+            monkeypatch.setenv("BOB_BOT_TOKEN", "bob-token")
 
             started = time.perf_counter()
             await TelegramBotRunner(relay, client).poll_once()
             elapsed = time.perf_counter() - started
 
-            assert sorted(client.update_calls) == [("aarya-token", None), ("bheem-token", None)]
+            assert sorted(client.update_calls) == [("alice-token", None), ("bob-token", None)]
             assert elapsed < 0.35
         finally:
             await relay.shutdown()
@@ -414,9 +414,9 @@ async def test_skip_transport_blocked_for_regular_agent(monkeypatch):
         try:
             await relay.storage.upsert_telegram_bot(
                 TelegramBotRegistration(
-                    identity_id="openclaw.aarya",
-                    username="AaryaAgentBot",
-                    token_ref="env:AARYA_BOT_TOKEN",
+                    identity_id="acme.alice",
+                    username="AliceAgentBot",
+                    token_ref="env:ALICE_BOT_TOKEN",
                     bot_to_bot_enabled=True,
                 )
             )
@@ -427,16 +427,16 @@ async def test_skip_transport_blocked_for_regular_agent(monkeypatch):
                     title="AgentRelay Lab",
                 )
             )
-            monkeypatch.setenv("AARYA_BOT_TOKEN", "aarya-token")
+            monkeypatch.setenv("ALICE_BOT_TOKEN", "alice-token")
             result = await relay.process(
                 {"content": "group-visible update", "skip_transport_delivery": True},
-                "openclaw.aarya",
+                "acme.alice",
                 "telegram:lab",
             )
             assert result["status"] == "sent"
             assert result["delivered_to"] == 1
             # Telegram delivery should still happen because sender is not telegram./system
-            assert client.sent == [("aarya-token", "-100123", "group-visible update")]
+            assert client.sent == [("alice-token", "-100123", "group-visible update")]
         finally:
             await relay.shutdown()
 

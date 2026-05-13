@@ -19,26 +19,26 @@ async def test_identity_storage_roundtrip_and_disable():
         try:
             saved = await storage.upsert_identity(
                 Identity(
-                    id="openclaw.aarya",
-                    display_name="Aarya",
+                    id="acme.alice",
+                    display_name="Alice",
                     kind=IdentityKind.VPS,
                     transport=IdentityTransport.MCP,
                     capabilities=["coordinate", "delegate"],
-                    metadata={"runtime": "openclaw"},
+                    metadata={"runtime": "my-client"},
                 )
             )
-            assert saved.id == "openclaw.aarya"
+            assert saved.id == "acme.alice"
             assert saved.enabled is True
 
             listed = await storage.list_identities()
-            assert [identity.id for identity in listed] == ["openclaw.aarya"]
+            assert [identity.id for identity in listed] == ["acme.alice"]
 
-            disabled = await storage.set_identity_enabled("openclaw.aarya", False)
+            disabled = await storage.set_identity_enabled("acme.alice", False)
             assert disabled is not None
             assert disabled.enabled is False
             assert await storage.list_identities() == []
             assert [identity.id for identity in await storage.list_identities(True)] == [
-                "openclaw.aarya"
+                "acme.alice"
             ]
         finally:
             await storage.close()

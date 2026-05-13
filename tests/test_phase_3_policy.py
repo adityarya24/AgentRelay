@@ -38,7 +38,7 @@ async def test_policy_denies_disabled_identity_and_requires_external_allow():
             )
             engine = PolicyEngine(storage)
 
-            blocked = await engine.evaluate("external.somebot", "openclaw.aarya", "general")
+            blocked = await engine.evaluate("external.somebot", "acme.alice", "general")
             assert blocked.allowed is False
             assert blocked.reason == "ALLOW_REQUIRED"
 
@@ -46,21 +46,21 @@ async def test_policy_denies_disabled_identity_and_requires_external_allow():
                 PolicyRule(
                     id="allow-general",
                     source="external.somebot",
-                    target="openclaw.aarya",
+                    target="acme.alice",
                     room="general",
                     effect=PolicyEffect.ALLOW,
                 )
             )
-            allowed = await engine.evaluate("external.somebot", "openclaw.aarya", "general")
+            allowed = await engine.evaluate("external.somebot", "acme.alice", "general")
             assert allowed.allowed is True
             assert allowed.rule_id == "allow-general"
 
-            wrong_room = await engine.evaluate("external.somebot", "openclaw.aarya", "private")
+            wrong_room = await engine.evaluate("external.somebot", "acme.alice", "private")
             assert wrong_room.allowed is False
             assert wrong_room.reason == "ALLOW_REQUIRED"
 
             await storage.set_identity_enabled("external.somebot", False)
-            disabled = await engine.evaluate("external.somebot", "openclaw.aarya", "general")
+            disabled = await engine.evaluate("external.somebot", "acme.alice", "general")
             assert disabled.allowed is False
             assert disabled.reason == "IDENTITY_DISABLED"
         finally:
@@ -76,8 +76,8 @@ async def test_policy_explicit_deny_wins_over_allow():
             await storage.upsert_policy(
                 PolicyRule(
                     id="allow",
-                    source="openclaw.bheem",
-                    target="openclaw.aarya",
+                    source="acme.bob",
+                    target="acme.alice",
                     room="general",
                     effect=PolicyEffect.ALLOW,
                 )
@@ -85,8 +85,8 @@ async def test_policy_explicit_deny_wins_over_allow():
             await storage.upsert_policy(
                 PolicyRule(
                     id="deny",
-                    source="openclaw.bheem",
-                    target="openclaw.aarya",
+                    source="acme.bob",
+                    target="acme.alice",
                     room="general",
                     effect=PolicyEffect.DENY,
                     reason="maintenance",
@@ -94,7 +94,7 @@ async def test_policy_explicit_deny_wins_over_allow():
             )
 
             decision = await PolicyEngine(storage).evaluate(
-                "openclaw.bheem", "openclaw.aarya", "general"
+                "acme.bob", "acme.alice", "general"
             )
             assert decision.allowed is False
             assert decision.reason == "POLICY_DENY"
@@ -112,15 +112,15 @@ async def test_policy_allow_required_respects_room_scope():
             await storage.upsert_policy(
                 PolicyRule(
                     id="allow-private",
-                    source="openclaw.bheem",
-                    target="openclaw.aarya",
+                    source="acme.bob",
+                    target="acme.alice",
                     room="private",
                     effect=PolicyEffect.ALLOW,
                 )
             )
 
             decision = await PolicyEngine(storage).evaluate(
-                "openclaw.bheem", "openclaw.aarya", "general"
+                "acme.bob", "acme.alice", "general"
             )
             assert decision.allowed is True
             assert decision.reason == "DEFAULT_ALLOW"
@@ -137,8 +137,8 @@ def test_policy_cli_adds_and_lists_room_scoped_rule(capsys):
                 "--db-path",
                 db_path,
                 "allow",
-                "openclaw.bheem",
-                "openclaw.aarya",
+                "acme.bob",
+                "acme.alice",
                 "--room",
                 "general",
                 "--reason",
@@ -147,8 +147,8 @@ def test_policy_cli_adds_and_lists_room_scoped_rule(capsys):
             ]
         )
         saved = json.loads(capsys.readouterr().out)
-        assert saved["source"] == "openclaw.bheem"
-        assert saved["target"] == "openclaw.aarya"
+        assert saved["source"] == "acme.bob"
+        assert saved["target"] == "acme.alice"
         assert saved["room"] == "general"
         assert saved["effect"] == "allow"
 
@@ -166,16 +166,16 @@ async def test_relay_blocks_dm_when_policy_denies_target_route():
             await relay.storage.upsert_policy(
                 PolicyRule(
                     id="deny-dm",
-                    source="openclaw.bheem",
-                    target="openclaw.aarya",
+                    source="acme.bob",
+                    target="acme.alice",
                     room="general",
                     effect=PolicyEffect.DENY,
                 )
             )
 
             result = await relay.process(
-                {"content": "secret", "target": "openclaw.aarya"},
-                "openclaw.bheem",
+                {"content": "secret", "target": "acme.alice"},
+                "acme.bob",
                 "general",
             )
             assert result["error"] == "POLICY_DENY"

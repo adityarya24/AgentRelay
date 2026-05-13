@@ -1,7 +1,7 @@
 """MCP stdio/SSE server for AgentRelay v2 — multi-agent identity support.
 
 Each MCP tool accepts an optional ``sender`` / ``from_agent`` parameter so
-multiple OpenClaw agents sharing one MCP server can each use their own
+multiple your MCP client agents sharing one MCP server can each use their own
 identity.  The server keeps a pool of :class:`RelayClient` instances keyed
 by ``(agent, room)`` and reuses them across calls.
 
@@ -9,7 +9,7 @@ If no per-call identity is given, the server falls back to the default
 agent name configured via ``--agent``, ``AGENTRELAY_AGENT``, or the
 hard-coded ``"mcp"`` default.
 
-OpenClaw agents configure their identity by adding connection params to
+your MCP client agents configure their identity by adding connection params to
 the MCP server config, e.g.:
 
 .. code-block:: json
@@ -18,7 +18,7 @@ the MCP server config, e.g.:
       "mcpServers": {
         "agentrelay": {
           "command": "agentrelay-mcp",
-          "args": ["--agent", "bheem", "--room", "team"],
+          "args": ["--agent", "bob", "--room", "team"],
           "env": {"AGENTRELAY_URL": "ws://localhost:8899"}
         }
     }
@@ -287,7 +287,7 @@ def create_mcp_server(
         Args:
             content: The message text.
             thread: Optional thread / topic ID.
-            from_agent: Override the sender identity (e.g. ``"bheem"``).
+            from_agent: Override the sender identity (e.g. ``"bob"``).
                 When omitted, the server default is used.
             room: Override the target room.
         """

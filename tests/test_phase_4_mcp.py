@@ -1,4 +1,4 @@
-"""Tests proving multiple agents (bheem/aarya) maintain separate identities
+"""Tests proving multiple agents (bob/alice) maintain separate identities
 through the MCP → relay pipeline, and that list_agents shows both when connected.
 """
 
@@ -34,10 +34,10 @@ def test_client_pool_returns_same_client_for_same_key():
         connect_timeout=1,
         response_timeout=1,
     )
-    c1 = pool.get("bheem", "team")
-    c2 = pool.get("bheem", "team")
+    c1 = pool.get("bob", "team")
+    c2 = pool.get("bob", "team")
     assert c1 is c2
-    assert c1.agent == "bheem"
+    assert c1.agent == "bob"
     assert c1.room == "team"
 
 
@@ -50,11 +50,11 @@ def test_client_pool_returns_different_clients_for_different_agents():
         connect_timeout=1,
         response_timeout=1,
     )
-    bheem = pool.get("bheem", "team")
-    aarya = pool.get("aarya", "team")
-    assert bheem is not aarya
-    assert bheem.agent == "bheem"
-    assert aarya.agent == "aarya"
+    bob = pool.get("bob", "team")
+    alice = pool.get("alice", "team")
+    assert bob is not alice
+    assert bob.agent == "bob"
+    assert alice.agent == "alice"
 
 
 def test_client_pool_falls_back_to_defaults():
@@ -80,8 +80,8 @@ def test_client_pool_agent_override_without_room():
         connect_timeout=1,
         response_timeout=1,
     )
-    client = pool.get("bheem")
-    assert client.agent == "bheem"
+    client = pool.get("bob")
+    assert client.agent == "bob"
     assert client.room == "general"
 
 
@@ -109,7 +109,7 @@ async def test_mcp_server_exposes_all_phase_4_tools():
 # ---------------------------------------------------------------------------
 
 def test_two_agents_see_correct_sender_fields():
-    """Connect bheem and aarya to the relay; verify each receives messages
+    """Connect bob and alice to the relay; verify each receives messages
     from the other with the correct sender field."""
     with tempfile.TemporaryDirectory() as td:
         relay = Relay(
@@ -119,31 +119,31 @@ def test_two_agents_see_correct_sender_fields():
         app = create_app(relay)
         with TestClient(app) as client:
             with (
-                client.websocket_connect("/ws") as ws_bheem,
-                client.websocket_connect("/ws") as ws_aarya,
+                client.websocket_connect("/ws") as ws_bob,
+                client.websocket_connect("/ws") as ws_alice,
             ):
-                auth_ws(ws_bheem, "bheem", "team")
-                auth_ws(ws_aarya, "aarya", "team")
-                # bheem receives aarya's join notification
-                join_msg = ws_bheem.receive_json()
+                auth_ws(ws_bob, "bob", "team")
+                auth_ws(ws_alice, "alice", "team")
+                # bob receives alice's join notification
+                join_msg = ws_bob.receive_json()
                 assert join_msg["type"] == "join"
                 assert join_msg["sender"] == "system"
 
-                # aarya sends a DM to bheem
-                ws_aarya.send_json({"content": "hello bheem", "target": "bheem"})
-                # bheem receives the DM
-                dm = ws_bheem.receive_json()
-                assert dm["content"] == "hello bheem"
-                assert dm["sender"] == "aarya"
-                assert dm["target"] == "bheem"
+                # alice sends a DM to bob
+                ws_alice.send_json({"content": "hello bob", "target": "bob"})
+                # bob receives the DM
+                dm = ws_bob.receive_json()
+                assert dm["content"] == "hello bob"
+                assert dm["sender"] == "alice"
+                assert dm["target"] == "bob"
 
-                # aarya receives ack for her DM send
-                ack = ws_aarya.receive_json()
+                # alice receives ack for her DM send
+                ack = ws_alice.receive_json()
                 assert ack["content"] == "ack"
 
 
 def test_list_agents_shows_both_connected_agents():
-    """After connecting bheem and aarya, the /agents endpoint returns both."""
+    """After connecting bob and alice, the /agents endpoint returns both."""
     with tempfile.TemporaryDirectory() as td:
         relay = Relay(
             token="test-token",
@@ -152,19 +152,19 @@ def test_list_agents_shows_both_connected_agents():
         app = create_app(relay)
         with TestClient(app) as client:
             with (
-                client.websocket_connect("/ws") as ws_bheem,
-                client.websocket_connect("/ws") as ws_aarya,
+                client.websocket_connect("/ws") as ws_bob,
+                client.websocket_connect("/ws") as ws_alice,
             ):
-                auth_ws(ws_bheem, "bheem", "team")
-                auth_ws(ws_aarya, "aarya", "team")
+                auth_ws(ws_bob, "bob", "team")
+                auth_ws(ws_alice, "alice", "team")
                 agents = client.get("/agents", headers=AUTH_HEADERS).json()
                 agent_ids = {a["id"] for a in agents}
-                assert "bheem" in agent_ids
-                assert "aarya" in agent_ids
+                assert "bob" in agent_ids
+                assert "alice" in agent_ids
 
 
-def test_bheem_broadcast_arrives_at_aarya_with_correct_sender():
-    """bheem broadcasts a message; aarya receives it with sender='bheem'."""
+def test_bob_broadcast_arrives_at_alice_with_correct_sender():
+    """bob broadcasts a message; alice receives it with sender='bob'."""
     with tempfile.TemporaryDirectory() as td:
         relay = Relay(
             token="test-token",
@@ -173,28 +173,28 @@ def test_bheem_broadcast_arrives_at_aarya_with_correct_sender():
         app = create_app(relay)
         with TestClient(app) as client:
             with (
-                client.websocket_connect("/ws") as ws_bheem,
-                client.websocket_connect("/ws") as ws_aarya,
+                client.websocket_connect("/ws") as ws_bob,
+                client.websocket_connect("/ws") as ws_alice,
             ):
-                auth_ws(ws_bheem, "bheem", "team")
-                auth_ws(ws_aarya, "aarya", "team")
+                auth_ws(ws_bob, "bob", "team")
+                auth_ws(ws_alice, "alice", "team")
                 # discard join notification
-                ws_bheem.receive_json()
+                ws_bob.receive_json()
 
-                ws_bheem.send_json({"content": "standup in 5"})
+                ws_bob.send_json({"content": "standup in 5"})
 
-                # bheem receives its own broadcast echo
-                bcast_echo = ws_bheem.receive_json()
-                assert bcast_echo["sender"] == "bheem"
+                # bob receives its own broadcast echo
+                bcast_echo = ws_bob.receive_json()
+                assert bcast_echo["sender"] == "bob"
                 assert bcast_echo["content"] == "standup in 5"
 
-                # bheem receives ack
-                ack = ws_bheem.receive_json()
+                # bob receives ack
+                ack = ws_bob.receive_json()
                 assert ack["content"] == "ack"
 
-                # aarya receives the broadcast
-                broadcast = ws_aarya.receive_json()
-                assert broadcast["sender"] == "bheem"
+                # alice receives the broadcast
+                broadcast = ws_alice.receive_json()
+                assert broadcast["sender"] == "bob"
                 assert broadcast["content"] == "standup in 5"
 
 

@@ -1,14 +1,14 @@
 # AgentRelay Telegram Bot-to-Bot Roadmap
 
 Date: 2026-05-11
-Owner: Aditya
-Project stance: public self-hosted open-source first, tested on Aditya's VPS agent ecosystem.
+Owner: your-name
+Project stance: public self-hosted open-source first, tested on your VPS agent ecosystem.
 
 ## North Star
 
 AgentRelay is a governed real-time communication hub for AI agents and bots.
 
-It should let MCP agents, WebSocket agents, Telegram bots, OpenClaw, Hermes, Claude Code, and external user-provided bots communicate through one broker with identity, routing policy, loop prevention, audit logs, and admin control.
+It should let MCP agents, WebSocket agents, Telegram bots, your agent CLI, another agent framework, Claude Code, and external user-provided bots communicate through one broker with identity, routing policy, loop prevention, audit logs, and admin control.
 
 Telegram is a transport. AgentRelay owns the source of truth for identity, permissions, conversation state, safety decisions, and observability.
 
@@ -27,7 +27,7 @@ AgentRelay does not own:
 
 - BotFather account settings
 - individual model/provider execution
-- OpenClaw, Hermes, or Claude Code internal runtime state
+- your agent CLI, another framework, or Claude Code internal runtime state
 - private bot tokens beyond secure local storage and runtime use
 
 ## Phase 0: Product Boundary
@@ -77,10 +77,10 @@ Deliverables:
 
 Example identities:
 
-- `openclaw.aarya`
-- `openclaw.bheem`
-- `hermes.karna`
-- `claude.bheeshm`
+- `acme.alice`
+- `acme.bob`
+- `hermes.charlie`
+- `claude.dave`
 - `external.somebot`
 
 Acceptance checks:
@@ -170,18 +170,18 @@ Goal: test against Aditya's real multi-agent ecosystem before public release.
 
 Profiles:
 
-- `openclaw`
+- `your-agent-cli`
 - `hermes`
 - `claude-code`
 - `external-test`
 
 Acceptance checks:
 
-- OpenClaw agents communicate through AgentRelay only through allowed routes.
-- Hermes agents can talk to OpenClaw only when policy allows.
-- Claude Code/Bheeshm can observe or participate safely.
+- your agent CLI agents communicate through AgentRelay only through allowed routes.
+- another framework agents can talk to your agent CLI only when policy allows.
+- Claude Code can observe or participate safely.
 - External test bots cannot access private rooms.
-- No Aarya DM or cross-agent routing leakage occurs.
+- No Alice DM or cross-agent routing leakage occurs.
 - Restart recovery preserves identity, policy, and thread state.
 
 ## Phase 8: Public Release

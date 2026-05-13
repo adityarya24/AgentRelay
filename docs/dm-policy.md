@@ -5,12 +5,12 @@
 When an agent sends a **DM** (direct message, i.e. a message with `target` set), the policy engine evaluates the route using the **sender's current room** as the room context.
 
 Example:
-- Agent `openclaw.bheem` is joined to room `general`.
-- Agent `openclaw.aarya` is only subscribed to room `private`.
-- `openclaw.bheem` sends a DM to `openclaw.aarya` while in `general`.
-- Policy check runs with `room="general"`, `source="openclaw.bheem"`, `target="openclaw.aarya"`.
+- Agent `acme.bob` is joined to room `general`.
+- Agent `acme.alice` is only subscribed to room `private`.
+- `acme.bob` sends a DM to `acme.alice` while in `general`.
+- Policy check runs with `room="general"`, `source="acme.bob"`, `target="acme.alice"`.
 
-If an `ALLOW` rule exists for `openclaw.bheem -> openclaw.aarya` in room `private`, it **does not** apply to this DM because the sender is in `general`.
+If an `ALLOW` rule exists for `acme.bob -> acme.alice` in room `private`, it **does not** apply to this DM because the sender is in `general`.
 
 ## Why This Design
 
@@ -36,7 +36,7 @@ If room-agnostic DMs are needed later, the safest path is:
 1. Introduce a new policy `room` value: `dm` (or keep `*` with explicit opt-in).
 2. Allow `room=dm` rules that apply only to DM routes.
 3. Maintain backward compatibility: if no `room=dm` rule exists, fall back to sender-room behavior.
-4. Update the CLI: `agentrelay policy allow bheem aarya --room dm`.
+4. Update the CLI: `agentrelay policy allow bob alice --room dm`.
 5. Add a configuration flag to opt into strict DM policy mode.
 
 ## Summary

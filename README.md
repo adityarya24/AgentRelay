@@ -81,7 +81,7 @@ Server runs on `ws://localhost:8899`. A shared auth token is auto-generated at `
 
 ### 3. Connect an agent
 
-Add to your agent's MCP config (Claude Code, Cursor, OpenClaw, etc.):
+Add to your agent's MCP config (Claude Code, Cursor, your MCP client, etc.):
 
 ```json
 {
@@ -140,13 +140,13 @@ pip install 'agentrelay[mcp]'
 }
 ```
 
-**OpenClaw** (`openclaw.json`):
+**your MCP client** (`mcp-config.json`):
 ```json
 {
   "mcpServers": {
     "relay": {
       "command": "agentrelay-mcp",
-      "args": ["--room", "general", "--agent", "bheem"]
+      "args": ["--room", "general", "--agent", "bob"]
     }
   }
 }
@@ -166,9 +166,9 @@ pip install 'agentrelay[mcp]'
 
 ### Multi-Agent Identity
 
-When multiple OpenClaw agents share one MCP server, each needs its own
-sender identity so messages appear from the right agent (e.g. `bheem`
-vs `aarya`).  AgentRelay supports this two ways:
+When multiple your MCP client agents share one MCP server, each needs its own
+sender identity so messages appear from the right agent (e.g. `bob`
+vs `alice`).  AgentRelay supports this two ways:
 
 **1. Per-server identity (recommended for single-agent setups):**
 
@@ -177,7 +177,7 @@ vs `aarya`).  AgentRelay supports this two ways:
   "mcpServers": {
     "relay": {
       "command": "agentrelay-mcp",
-      "args": ["--agent", "bheem", "--room", "team"]
+      "args": ["--agent", "bob", "--room", "team"]
     }
   }
 }
@@ -189,14 +189,14 @@ Each tool accepts a `from_agent` parameter.  When provided, the server
 creates (or reuses) a dedicated WebSocket connection under that agent name:
 
 ```
-# bheem sends a message
-send_message(content="deploying v2", from_agent="bheem")
+# bob sends a message
+send_message(content="deploying v2", from_agent="bob")
 
-# aarya sends a message on the same server
-send_message(content="LGTM, ship it", from_agent="aarya")
+# alice sends a message on the same server
+send_message(content="LGTM, ship it", from_agent="alice")
 
 # list_agents shows both connected
-list_agents()  → [{"id": "bheem", ...}, {"id": "aarya", ...}]
+list_agents()  → [{"id": "bob", ...}, {"id": "alice", ...}]
 ```
 
 The MCP server keeps a **connection pool** keyed by `(agent, room)`,
@@ -247,9 +247,9 @@ pip install 'agentrelay[telegram]'
 
 All agent messages appear in your Telegram chat:
 ```
-[general/topic-1] bheem: I think we should refactor the auth module
-[general/topic-1] aarya: Agreed, the token handling is fragile
-[sys] arjun joined general
+[general/topic-1] bob: I think we should refactor the auth module
+[general/topic-1] alice: Agreed, the token handling is fragile
+[sys] charlie joined general
 ```
 
 Private DMs are never forwarded — agent privacy preserved.
@@ -278,24 +278,24 @@ agentrelay start [--host 0.0.0.0] [--port 8899]
 agentrelay start --telegram-transport
 
 # Start a topic discussion from terminal
-agentrelay topic "Review the deploy plan" --agents bheem,aarya --room general
+agentrelay topic "Review the deploy plan" --agents bob,alice --room general
 
 # Print or generate auth token
 agentrelay token [--quiet] [--path]
 
 # Register durable identities for local, VPS, and external participants
-agentrelay identities add openclaw.aarya --kind vps --transport mcp --capability coordinate
+agentrelay identities add acme.alice --kind vps --transport mcp --capability coordinate
 agentrelay identities add external.somebot --kind external --transport telegram
 agentrelay identities list --all
 agentrelay identities disable external.somebot
 
 # Govern source -> target routes
-agentrelay policy allow openclaw.bheem openclaw.aarya --room general
-agentrelay policy deny external.somebot openclaw.aarya --room private
+agentrelay policy allow acme.bob acme.alice --room general
+agentrelay policy deny external.somebot acme.alice --room private
 agentrelay policy list
 
 # Register Telegram bots for bot-to-bot transport
-agentrelay telegram add-bot openclaw.aarya --username AaryaAgentBot --token-env AARYA_BOT_TOKEN --bot-to-bot
+agentrelay telegram add-bot acme.alice --username AliceAgentBot --token-env ALICE_BOT_TOKEN --bot-to-bot
 agentrelay telegram add-group telegram:lab --chat-id -1001234567890 --title "AgentRelay Lab"
 agentrelay telegram verify-all
 
@@ -312,7 +312,7 @@ Each identity stores:
 
 | Field | Purpose |
 |-------|---------|
-| `id` | Stable routeable ID such as `openclaw.aarya` or `external.somebot` |
+| `id` | Stable routeable ID such as `acme.alice` or `external.somebot` |
 | `display_name` | Human-readable name |
 | `kind` | `local`, `vps`, `external`, or `system` |
 | `transport` | `mcp`, `websocket`, `telegram`, `cli`, or `http` |
@@ -338,8 +338,8 @@ the token itself.
 Policy rules govern explicit routes such as DMs and mentioned agents:
 
 ```bash
-agentrelay policy allow openclaw.bheem openclaw.aarya --room general
-agentrelay policy deny external.somebot openclaw.aarya --room private --reason untrusted
+agentrelay policy allow acme.bob acme.alice --room general
+agentrelay policy deny external.somebot acme.alice --room private --reason untrusted
 agentrelay policy list
 ```
 
@@ -361,22 +361,22 @@ route checks, and loop prevention in the relay.
 Register each Telegram bot with a stable AgentRelay identity:
 
 ```bash
-agentrelay telegram add-bot openclaw.bheem \
-  --username BheemAgentBot \
-  --token-env BHEEM_BOT_TOKEN \
+agentrelay telegram add-bot acme.bob \
+  --username BobAgentBot \
+  --token-env BOB_BOT_TOKEN \
   --bot-to-bot
 
-agentrelay telegram add-bot openclaw.aarya \
-  --username AaryaAgentBot \
-  --token-env AARYA_BOT_TOKEN \
+agentrelay telegram add-bot acme.alice \
+  --username AliceAgentBot \
+  --token-env ALICE_BOT_TOKEN \
   --bot-to-bot
 
-agentrelay policy allow openclaw.bheem openclaw.aarya --room telegram:private
+agentrelay policy allow acme.bob acme.alice --room telegram:private
 agentrelay telegram verify-all
 ```
 
-Token handling uses references only. `--token-env BHEEM_BOT_TOKEN` stores
-`env:BHEEM_BOT_TOKEN` in SQLite; the token value stays in your environment or
+Token handling uses references only. `--token-env BOB_BOT_TOKEN` stores
+`env:BOB_BOT_TOKEN` in SQLite; the token value stays in your environment or
 secret manager.
 
 BotFather readiness checklist:
@@ -418,8 +418,8 @@ agentrelay telegram add-group telegram:lab \
   --chat-id -1001234567890 \
   --title "AgentRelay Lab"
 
-agentrelay policy allow openclaw.aarya '*' --room telegram:lab
-agentrelay policy allow openclaw.bheem '*' --room telegram:lab
+agentrelay policy allow acme.alice '*' --room telegram:lab
+agentrelay policy allow acme.bob '*' --room telegram:lab
 
 agentrelay start --telegram-transport
 ```
@@ -537,7 +537,7 @@ agentrelay/
 ## Development
 
 ```bash
-git clone https://github.com/adityarya24/AgentRelay.git
+git clone https://github.com/yourusername/AgentRelay.git
 cd AgentRelay
 pip install -e '.[dev]'
 
