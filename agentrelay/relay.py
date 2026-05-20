@@ -523,7 +523,7 @@ def create_app(relay: Relay | None = None) -> FastAPI:
 
     @app.get("/")
     async def health():
-        return {"status": "ok", "version": __version__, "agents": len(relay._agents)}
+        return {"status": "ok"}
 
     @app.get("/rooms")
     async def rooms(_: None = Depends(require_http_auth)):

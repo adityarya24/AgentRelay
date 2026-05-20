@@ -65,9 +65,10 @@ def test_http_health_and_empty_rooms():
         relay = Relay(token="test-token", db_path=str(Path(td) / "relay.db"))
         app = create_app(relay)
         with TestClient(app) as client:
-            assert client.get("/").json()["status"] == "ok"
+            assert client.get("/").json() == {"status": "ok"}
             assert client.get("/rooms", headers=AUTH_HEADERS).json() == []
             assert client.get("/agents", headers=AUTH_HEADERS).json() == []
+            assert client.get("/metrics", headers=AUTH_HEADERS).json()["connected_agents"] == 0
 
 
 def test_websocket_exchange_and_history():

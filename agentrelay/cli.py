@@ -134,6 +134,10 @@ def _default_enabled(identity_id: str, kind: IdentityKind, explicit: bool | None
     return not (kind == IdentityKind.EXTERNAL or identity_id.startswith("external."))
 
 
+def _telegram_identity_kind(identity_id: str) -> IdentityKind:
+    return IdentityKind.EXTERNAL if identity_id.startswith("external.") else IdentityKind.VPS
+
+
 async def _identities_add(args: argparse.Namespace) -> None:
     storage = await _identity_storage(args)
     try:
@@ -303,17 +307,14 @@ async def _telegram_add_bot(args: argparse.Namespace) -> None:
         )
         saved = await storage.upsert_telegram_bot(bot)
         if await storage.get_identity(args.identity_id) is None:
+            kind = _telegram_identity_kind(args.identity_id)
             identity = Identity(
                 id=args.identity_id,
                 display_name=args.identity_id,
-                kind=IdentityKind.EXTERNAL
-                if args.identity_id.startswith("external.")
-                else IdentityKind.VPS,
+                kind=kind,
                 transport=IdentityTransport.TELEGRAM,
-                enabled=not args.identity_id.startswith("external."),
-                trust_level=TrustLevel.SANDBOX
-                if args.identity_id.startswith("external.")
-                else TrustLevel.TRUSTED,
+                enabled=_default_enabled(args.identity_id, kind, None),
+                trust_level=_default_trust(args.identity_id, kind),
                 secret_ref=token_ref,
             )
             await storage.upsert_identity(identity)
@@ -424,15 +425,17 @@ async def _init_telegram_lab(args: argparse.Namespace) -> None:
             )
         for identity_id, username, token_env in parsed:
             token_ref = f"env:{token_env}"
+            kind = _telegram_identity_kind(identity_id)
+            enabled = _default_enabled(identity_id, kind, None)
             await storage.upsert_identity(
                 Identity(
                     id=identity_id,
                     display_name=identity_id,
-                    kind=IdentityKind.VPS,
+                    kind=kind,
                     transport=IdentityTransport.TELEGRAM,
                     capabilities=["telegram", "bot-to-bot"],
-                    enabled=True,
-                    trust_level=TrustLevel.TRUSTED,
+                    enabled=enabled,
+                    trust_level=_default_trust(identity_id, kind),
                     secret_ref=token_ref,
                 )
             )
@@ -442,12 +445,16 @@ async def _init_telegram_lab(args: argparse.Namespace) -> None:
                     username=username,
                     token_ref=token_ref,
                     bot_to_bot_enabled=True,
-                    enabled=True,
+                    enabled=enabled,
                 )
             )
         policy_count = 0
         if args.allow_pairwise:
-            identities = [identity_id for identity_id, _, _ in parsed]
+            identities = [
+                identity_id
+                for identity_id, _, _ in parsed
+                if _default_enabled(identity_id, _telegram_identity_kind(identity_id), None)
+            ]
             for source in identities:
                 for target in identities:
                     if source == target:

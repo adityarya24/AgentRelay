@@ -135,6 +135,37 @@ def test_telegram_lab_init_registers_bots_group_and_policies(capsys):
         }
 
 
+def test_telegram_lab_init_keeps_external_bots_sandboxed_and_disabled(capsys):
+    with tempfile.TemporaryDirectory() as td:
+        db_path = str(Path(td) / "relay.db")
+        main(
+            [
+                "init",
+                "telegram-lab",
+                "--db-path",
+                db_path,
+                "--bot",
+                "external.alpha=@AlphaAgentBot:ALPHA_BOT_TOKEN",
+                "--bot",
+                "agent.beta=@BetaAgentBot:BETA_BOT_TOKEN",
+                "--json",
+            ]
+        )
+        summary = json.loads(capsys.readouterr().out)
+        assert summary["policies"] == 0
+
+        main(["identities", "--db-path", db_path, "show", "external.alpha"])
+        identity = json.loads(capsys.readouterr().out)
+        assert identity["kind"] == "external"
+        assert identity["trust_level"] == "sandbox"
+        assert identity["enabled"] is False
+
+        main(["telegram", "--db-path", db_path, "list-bots", "--all", "--json"])
+        bots = {bot["identity_id"]: bot for bot in json.loads(capsys.readouterr().out)}
+        assert bots["external.alpha"]["enabled"] is False
+        assert bots["agent.beta"]["enabled"] is True
+
+
 def test_telegram_lab_init_rejects_malformed_bot_spec(capsys):
     with tempfile.TemporaryDirectory() as td:
         db_path = str(Path(td) / "relay.db")
