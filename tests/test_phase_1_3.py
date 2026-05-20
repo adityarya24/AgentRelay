@@ -165,7 +165,12 @@ async def test_cleanup_removes_orphan_closed_threads():
 def test_start_does_not_print_token(capsys, monkeypatch):
     from agentrelay.cli import cmd_start
     import argparse
+
+    def stop_server(*args, **kwargs):
+        raise SystemExit
+
     monkeypatch.setenv("AGENTRELAY_TOKEN", "test-token")
+    monkeypatch.setattr("agentrelay.cli.uvicorn.run", stop_server)
     args = argparse.Namespace(
         host=None, port=None, token=None,
         telegram_token=None, telegram_chat=None, telegram_transport=False,
@@ -184,11 +189,15 @@ def test_start_reports_configured_token_file(capsys, monkeypatch: pytest.MonkeyP
     from agentrelay.cli import cmd_start
     import argparse
 
+    def stop_server(*args, **kwargs):
+        raise SystemExit
+
     with tempfile.TemporaryDirectory() as td:
         token_file = Path(td) / "configured-token"
         token_file.write_text("test-token\n")
         monkeypatch.delenv("AGENTRELAY_TOKEN", raising=False)
         monkeypatch.setenv("AGENTRELAY_TOKEN_FILE", str(token_file))
+        monkeypatch.setattr("agentrelay.cli.uvicorn.run", stop_server)
         args = argparse.Namespace(
             host=None, port=None, token=None,
             telegram_token=None, telegram_chat=None, telegram_transport=False,
