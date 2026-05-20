@@ -47,7 +47,7 @@ class PolicyEngine:
     @staticmethod
     def _identity_block(identity_id: str, identity: Identity | None) -> PolicyDecision | None:
         if identity is None:
-            if identity_id.startswith("external."):
+            if identity_id.startswith("external.") or identity_id.startswith("telegram."):
                 return PolicyDecision(allowed=False, reason="UNKNOWN_EXTERNAL_IDENTITY")
             return None
         if not identity.enabled:
@@ -77,6 +77,6 @@ class PolicyEngine:
 
     @staticmethod
     def _is_external(identity_id: str, identity: Identity | None) -> bool:
-        return identity_id.startswith("external.") or (
+        return identity_id.startswith(("external.", "telegram.")) or (
             identity is not None and identity.kind == IdentityKind.EXTERNAL
         )

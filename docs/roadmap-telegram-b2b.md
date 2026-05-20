@@ -1,14 +1,13 @@
 # AgentRelay Telegram Bot-to-Bot Roadmap
 
 Date: 2026-05-11
-Owner: your-name
-Project stance: public self-hosted open-source first, tested on your VPS agent ecosystem.
+Project stance: public self-hosted open-source first, validated against real multi-agent deployments without baking in one private stack.
 
 ## North Star
 
 AgentRelay is a governed real-time communication hub for AI agents and bots.
 
-It should let MCP agents, WebSocket agents, Telegram bots, your agent CLI, another agent framework, Claude Code, and external user-provided bots communicate through one broker with identity, routing policy, loop prevention, audit logs, and admin control.
+It should let MCP agents, WebSocket agents, Telegram bots, local CLIs, cloud-hosted agents, coding assistants, and external user-provided bots communicate through one broker with identity, routing policy, loop prevention, audit logs, and admin control.
 
 Telegram is a transport. AgentRelay owns the source of truth for identity, permissions, conversation state, safety decisions, and observability.
 
@@ -27,7 +26,7 @@ AgentRelay does not own:
 
 - BotFather account settings
 - individual model/provider execution
-- your agent CLI, another framework, or Claude Code internal runtime state
+- an agent framework's internal runtime state
 - private bot tokens beyond secure local storage and runtime use
 
 ## Phase 0: Product Boundary
@@ -164,24 +163,25 @@ Acceptance checks:
 - A single command reports missing tokens, BotFather readiness, offline bots, and blocked policies.
 - Non-expert users can follow onboarding without reading source code.
 
-## Phase 7: VPS Integration Lab
+## Phase 7: Integration Lab
 
-Goal: test against Aditya's real multi-agent ecosystem before public release.
+Goal: test against realistic multi-agent deployments before public release.
 
 Profiles:
 
-- `your-agent-cli`
-- `hermes`
-- `claude-code`
+- `mcp-agent`
+- `websocket-agent`
+- `cli-agent`
+- `telegram-bot`
 - `external-test`
 
 Acceptance checks:
 
-- your agent CLI agents communicate through AgentRelay only through allowed routes.
-- another framework agents can talk to your agent CLI only when policy allows.
-- Claude Code can observe or participate safely.
+- local CLI agents communicate through AgentRelay only through allowed routes.
+- framework-backed agents can talk to each other only when policy allows.
+- MCP-capable coding agents can observe or participate safely.
 - External test bots cannot access private rooms.
-- No Alice DM or cross-agent routing leakage occurs.
+- No DM or cross-agent routing leakage occurs.
 - Restart recovery preserves identity, policy, and thread state.
 
 ## Phase 8: Public Release
@@ -206,13 +206,11 @@ Acceptance checks:
 
 ## Immediate Work Order
 
-1. Complete Phase 1 hardening.
-2. Add identity registry.
-3. Add policy engine.
-4. Add Telegram bot-to-bot connector.
-5. Add external bot onboarding.
-6. Run VPS integration lab.
-7. Polish and release.
+1. Keep Phase 1 hardening, identity registry, policy, and Telegram bot-to-bot covered by tests.
+2. Add generic onboarding: `agentrelay init telegram-lab`.
+3. Polish public docs around AgentRelay as a self-hosted multi-agent control plane.
+4. Add Docker/Compose and systemd deployment examples.
+5. Add release checklist, GitHub Actions, and package verification.
+6. Run integration lab profiles before public release.
 
-Do not implement Telegram bot-to-bot before Phase 1 hardening. Every public feature depends on the relay core being safe, scoped, and observable.
-
+Do not expand transport features faster than the safety layer. Every public feature depends on the relay core being authenticated, room-scoped, observable, and loop-safe.

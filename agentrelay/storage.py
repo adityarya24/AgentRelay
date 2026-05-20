@@ -294,8 +294,14 @@ class Storage:
         value = state.value if isinstance(state, ThreadState) else state
         closed_at = time.time() if value == ThreadState.CLOSED.value else None
         await self._execute(
-            "UPDATE threads SET state=?, closed_at=COALESCE(?, closed_at) WHERE id=? AND room=?",
-            (value, closed_at, thread_id, room),
+            """
+            INSERT INTO threads (id, room, title, state, msg_count, created_at, closed_at)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
+            ON CONFLICT(id, room) DO UPDATE SET
+                state=excluded.state,
+                closed_at=COALESCE(excluded.closed_at, threads.closed_at)
+            """,
+            (thread_id, room, thread_id, value, time.time(), closed_at),
         )
 
     async def fetch_terminal_threads(self) -> list[tuple[str, str]]:

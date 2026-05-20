@@ -162,3 +162,24 @@ def test_thread_state_is_room_scoped():
 
             history = client.get("/rooms/r2/history", headers=AUTH_HEADERS).json()
             assert [m["content"] for m in history] == ["open in r2"]
+
+
+def test_closing_unknown_thread_blocks_future_messages():
+    with tempfile.TemporaryDirectory() as td:
+        relay = Relay(
+            token="test-token",
+            db_path=str(Path(td) / "relay.db"),
+            governance=GovernanceConfig(cooldown_seconds=0),
+        )
+        app = create_app(relay)
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws") as ws:
+                auth_ws(ws, "a", "general")
+                ws.send_json({"type": "close", "thread": "future"})
+                closed = ws.receive_json()
+                assert closed["content"] == "thread closed: future"
+
+                ws.send_json({"content": "should be blocked", "thread": "future"})
+                rejected = ws.receive_json()
+                assert rejected["type"] == "system"
+                assert rejected["content"] == "governance_block: THREAD_CLOSED"

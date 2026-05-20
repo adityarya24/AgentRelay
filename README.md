@@ -12,11 +12,11 @@
 
 ---
 
-AgentRelay is a lightweight relay server that lets AI agents talk to each other in real-time — with built-in governance so they don't go haywire.
+AgentRelay is a self-hosted control plane that lets AI agents talk to each other in real time — with identity, policy, audit logs, and loop prevention built in.
 
-**The problem:** You have multiple AI agents (Claude, GPT, Llama, whatever). You want them to collaborate on a task, discuss a topic, or coordinate work. But there's no clean way to do agent-to-agent communication — and without guardrails, agents will talk forever.
+**The problem:** You have multiple agents across different runtimes: MCP clients, coding assistants, local tools, VPS services, Telegram bots, or custom WebSocket workers. You want them to coordinate, but raw agent-to-agent messaging has weak identity, weak policy, and no reliable stop button.
 
-**The solution:** AgentRelay gives you governed rooms where agents communicate via WebSocket. You watch everything from Telegram and control it with simple commands. Any agent that supports MCP can connect with 2 lines of config.
+**The solution:** AgentRelay gives you governed rooms where agents communicate through MCP, WebSocket, CLI, and Telegram bot-to-bot transports. Telegram can be the operator room, but AgentRelay remains the source of truth for who can talk, where, and for how long.
 
 ```
 pip install agentrelay
@@ -25,17 +25,32 @@ agentrelay start
 
 That's it. Zero config needed.
 
+For a supervised Telegram bot-to-bot lab:
+
+```bash
+agentrelay init telegram-lab \
+  --group-chat-id -1001234567890 \
+  --bot agent.alpha=@AlphaAgentBot:ALPHA_BOT_TOKEN \
+  --bot agent.beta=@BetaAgentBot:BETA_BOT_TOKEN
+
+export ALPHA_BOT_TOKEN=...
+export BETA_BOT_TOKEN=...
+agentrelay start --telegram-transport
+```
+
+In BotFather, enable **Bot-to-Bot Communication Mode** for each participating bot and add them to the group. AgentRelay registers the bots, maps the group to a room, installs room-scoped allow policies, and keeps loop/rate/thread guardrails active.
+
 ## How It Works
 
 ```
 ┌──────────┐     ┌──────────────────────────┐     ┌──────────┐
 │  Agent A  ├────►│                          ├────►│  Agent B  │
-│ (Claude)  │ WS  │      AgentRelay          │ WS  │  (GPT)    │
+│  (MCP)    │ WS  │      AgentRelay          │ WS  │(WebSocket)│
 └──────────┘     │                          │     └──────────┘
                  │  ┌────────────────────┐  │
 ┌──────────┐     │  │ Governance Engine  │  │     ┌──────────┐
 │  Agent C  ├────►│  │ Rate limits, caps, │  ├────►│    You    │
-│ (Llama)   │ MCP │  │ cooldowns, threads │  │ TG  │(Telegram) │
+│(Telegram) │ MCP │  │ cooldowns, threads │  │ TG  │ Operator  │
 └──────────┘     │  └────────────────────┘  │     └──────────┘
                  └──────────────────────────┘
 ```
@@ -295,6 +310,10 @@ agentrelay policy deny external.somebot acme.alice --room private
 agentrelay policy list
 
 # Register Telegram bots for bot-to-bot transport
+agentrelay init telegram-lab \
+  --group-chat-id -1001234567890 \
+  --bot agent.alpha=@AlphaAgentBot:ALPHA_BOT_TOKEN \
+  --bot agent.beta=@BetaAgentBot:BETA_BOT_TOKEN
 agentrelay telegram add-bot acme.alice --username AliceAgentBot --token-env ALICE_BOT_TOKEN --bot-to-bot
 agentrelay telegram add-group telegram:lab --chat-id -1001234567890 --title "AgentRelay Lab"
 agentrelay telegram verify-all
@@ -359,6 +378,15 @@ Telegram bot-to-bot is a transport layer. AgentRelay keeps identity, policy,
 route checks, and loop prevention in the relay.
 
 Register each Telegram bot with a stable AgentRelay identity:
+
+```bash
+agentrelay init telegram-lab \
+  --group-chat-id -1001234567890 \
+  --bot acme.bob=@BobAgentBot:BOB_BOT_TOKEN \
+  --bot acme.alice=@AliceAgentBot:ALICE_BOT_TOKEN
+```
+
+Or register the same pieces manually:
 
 ```bash
 agentrelay telegram add-bot acme.bob \

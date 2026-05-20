@@ -178,3 +178,54 @@ def test_start_does_not_print_token(capsys, monkeypatch):
     assert "Token: test-token" not in captured.out
     assert "Token file:" in captured.out
     assert "Token env:" in captured.out
+
+
+def test_start_reports_configured_token_file(capsys, monkeypatch: pytest.MonkeyPatch):
+    from agentrelay.cli import cmd_start
+    import argparse
+
+    with tempfile.TemporaryDirectory() as td:
+        token_file = Path(td) / "configured-token"
+        token_file.write_text("test-token\n")
+        monkeypatch.delenv("AGENTRELAY_TOKEN", raising=False)
+        monkeypatch.setenv("AGENTRELAY_TOKEN_FILE", str(token_file))
+        args = argparse.Namespace(
+            host=None, port=None, token=None,
+            telegram_token=None, telegram_chat=None, telegram_transport=False,
+            db_path=None, config=None,
+        )
+
+        with pytest.raises(SystemExit):
+            cmd_start(args)
+
+        assert f"Token file: {token_file}" in capsys.readouterr().out
+
+
+def test_token_path_has_no_generation_side_effect(capsys, monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as td:
+        home = Path(td)
+        token_file = home / ".agentrelay" / "token"
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.delenv("AGENTRELAY_TOKEN", raising=False)
+        monkeypatch.delenv("AGENTRELAY_TOKEN_FILE", raising=False)
+
+        from agentrelay.cli import main
+
+        main(["token", "--path"])
+
+        assert capsys.readouterr().out.strip() == str(token_file)
+        assert not token_file.exists()
+
+
+def test_token_path_reports_configured_token_file(capsys, monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as td:
+        token_file = Path(td) / "configured-token"
+        monkeypatch.delenv("AGENTRELAY_TOKEN", raising=False)
+        monkeypatch.setenv("AGENTRELAY_TOKEN_FILE", str(token_file))
+
+        from agentrelay.cli import main
+
+        main(["token", "--path"])
+
+        assert capsys.readouterr().out.strip() == str(token_file)
+        assert not token_file.exists()

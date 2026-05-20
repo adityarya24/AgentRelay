@@ -28,6 +28,11 @@ from .storage import Storage
 DEFAULT_URL = "ws://localhost:8899"
 
 
+def _token_file_path() -> Path:
+    token_file = os.getenv("AGENTRELAY_TOKEN_FILE")
+    return Path(token_file).expanduser() if token_file else Path.home() / ".agentrelay" / "token"
+
+
 def _load_toml(path: str | None) -> dict:
     if not path:
         path = str(Path.home() / ".agentrelay" / "config.toml")
@@ -65,7 +70,7 @@ def cmd_start(args: argparse.Namespace) -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     print(f"AgentRelay v{__version__} listening on {host}:{port}")
-    token_path = Path.home() / ".agentrelay" / "token"
+    token_path = _token_file_path()
     print(f"Token file: {token_path}")
     print("Token env:  AGENTRELAY_TOKEN")
     from .relay import Relay
@@ -75,10 +80,11 @@ def cmd_start(args: argparse.Namespace) -> None:
 
 
 def cmd_token(args: argparse.Namespace) -> None:
-    token = ensure_token(args.token)
     if args.path:
-        print(str(Path.home() / ".agentrelay" / "token"))
-    elif args.quiet:
+        print(str(_token_file_path()))
+        return
+    token = ensure_token(args.token)
+    if args.quiet:
         print(token)
     else:
         print(token)
@@ -96,6 +102,14 @@ def _parse_kv(items: list[str] | None) -> dict[str, str]:
             raise ValueError(f"metadata must be KEY=VALUE, got {item!r}")
         parsed[key] = value
     return parsed
+
+
+def _parse_bot_spec(spec: str) -> tuple[str, str, str]:
+    identity, sep, rest = spec.partition("=")
+    username, token_sep, token_env = rest.partition(":")
+    if not sep or not token_sep or not identity or not username or not token_env:
+        raise ValueError("BOT must look like identity=@BotUsername:ENV_VAR")
+    return identity.strip(), username.strip().removeprefix("@"), token_env.strip()
 
 
 def _identity_json(identity: Identity) -> str:
@@ -391,6 +405,91 @@ async def _telegram_verify_all(args: argparse.Namespace) -> None:
         await storage.close()
 
 
+async def _init_telegram_lab(args: argparse.Namespace) -> None:
+    if not args.db_path and args.init_db_path:
+        args.db_path = args.init_db_path
+    parsed = [_parse_bot_spec(spec) for spec in args.bot]
+    if len(args.bot or []) < 2:
+        raise ValueError("telegram-lab requires at least two --bot entries")
+    storage = await _identity_storage(args)
+    try:
+        room = args.room
+        if args.group_chat_id:
+            await storage.upsert_telegram_group(
+                TelegramGroupRegistration(
+                    room=room,
+                    chat_id=str(args.group_chat_id),
+                    title=args.group_title,
+                )
+            )
+        for identity_id, username, token_env in parsed:
+            token_ref = f"env:{token_env}"
+            await storage.upsert_identity(
+                Identity(
+                    id=identity_id,
+                    display_name=identity_id,
+                    kind=IdentityKind.VPS,
+                    transport=IdentityTransport.TELEGRAM,
+                    capabilities=["telegram", "bot-to-bot"],
+                    enabled=True,
+                    trust_level=TrustLevel.TRUSTED,
+                    secret_ref=token_ref,
+                )
+            )
+            await storage.upsert_telegram_bot(
+                TelegramBotRegistration(
+                    identity_id=identity_id,
+                    username=username,
+                    token_ref=token_ref,
+                    bot_to_bot_enabled=True,
+                    enabled=True,
+                )
+            )
+        policy_count = 0
+        if args.allow_pairwise:
+            identities = [identity_id for identity_id, _, _ in parsed]
+            for source in identities:
+                for target in identities:
+                    if source == target:
+                        continue
+                    await storage.upsert_policy(
+                        PolicyRule(
+                            source=source,
+                            target=target,
+                            room=room,
+                            effect=PolicyEffect.ALLOW,
+                            reason="telegram-lab onboarding",
+                        )
+                    )
+                    policy_count += 1
+        summary = {
+            "room": room,
+            "bots": [identity_id for identity_id, _, _ in parsed],
+            "policies": policy_count,
+            "next_command": "agentrelay start --telegram-transport",
+        }
+        if args.json:
+            print(json.dumps(summary, ensure_ascii=False))
+        else:
+            print(f"Initialized {room} with {len(parsed)} Telegram bots.")
+            print("BotFather: enable Bot-to-Bot Communication Mode for every bot.")
+            print("Environment: export each token env var before starting AgentRelay.")
+            print("Start: agentrelay start --telegram-transport")
+    finally:
+        await storage.close()
+
+
+def cmd_init(args: argparse.Namespace) -> None:
+    try:
+        if args.init_cmd == "telegram-lab":
+            asyncio.run(_init_telegram_lab(args))
+        else:
+            raise ValueError("missing init command")
+    except Exception as exc:
+        print(f"agentrelay init failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
 def cmd_telegram(args: argparse.Namespace) -> None:
     try:
         if args.telegram_cmd == "add-bot":
@@ -457,6 +556,26 @@ def cmd_topic(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agentrelay")
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    init = sub.add_parser("init", help="initialize AgentRelay onboarding profiles")
+    init.add_argument("--db-path", dest="init_db_path")
+    init_sub = init.add_subparsers(dest="init_cmd", required=True)
+    telegram_lab = init_sub.add_parser(
+        "telegram-lab",
+        help="initialize a supervised Telegram bot-to-bot lab",
+    )
+    telegram_lab.add_argument("--db-path")
+    telegram_lab.add_argument("--room", default="telegram:lab")
+    telegram_lab.add_argument("--group-chat-id")
+    telegram_lab.add_argument("--group-title", default="AgentRelay Lab")
+    telegram_lab.add_argument("--bot", action="append", default=[], metavar="IDENTITY=@BOT:ENV")
+    telegram_lab.add_argument(
+        "--allow-pairwise",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    telegram_lab.add_argument("--json", action="store_true")
+    telegram_lab.set_defaults(func=cmd_init)
 
     start = sub.add_parser("start", help="start relay server")
     start.add_argument("--host")

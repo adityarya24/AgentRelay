@@ -86,6 +86,95 @@ def test_telegram_bot_registry_roundtrip_and_cli(capsys):
         assert [registered["room"] for registered in groups] == ["telegram:lab"]
 
 
+def test_telegram_lab_init_registers_bots_group_and_policies(capsys):
+    with tempfile.TemporaryDirectory() as td:
+        db_path = str(Path(td) / "relay.db")
+        main(
+            [
+                "init",
+                "telegram-lab",
+                "--db-path",
+                db_path,
+                "--room",
+                "telegram:lab",
+                "--group-chat-id",
+                "-100123",
+                "--group-title",
+                "AgentRelay Lab",
+                "--bot",
+                "agent.alpha=@AlphaAgentBot:ALPHA_BOT_TOKEN",
+                "--bot",
+                "agent.beta=@BetaAgentBot:BETA_BOT_TOKEN",
+                "--json",
+            ]
+        )
+        summary = json.loads(capsys.readouterr().out)
+        assert summary["room"] == "telegram:lab"
+        assert summary["bots"] == ["agent.alpha", "agent.beta"]
+        assert summary["policies"] == 2
+        assert summary["next_command"] == "agentrelay start --telegram-transport"
+
+        main(["telegram", "--db-path", db_path, "list-bots", "--json"])
+        bots = json.loads(capsys.readouterr().out)
+        assert [bot["identity_id"] for bot in bots] == ["agent.alpha", "agent.beta"]
+        assert all(bot["bot_to_bot_enabled"] for bot in bots)
+
+        main(["telegram", "--db-path", db_path, "list-groups", "--json"])
+        groups = json.loads(capsys.readouterr().out)
+        assert groups[0]["room"] == "telegram:lab"
+        assert groups[0]["chat_id"] == "-100123"
+
+        main(["policy", "--db-path", db_path, "list", "--json"])
+        policies = json.loads(capsys.readouterr().out)
+        routes = {
+            (rule["source"], rule["target"], rule["room"], rule["effect"]) for rule in policies
+        }
+        assert routes == {
+            ("agent.alpha", "agent.beta", "telegram:lab", "allow"),
+            ("agent.beta", "agent.alpha", "telegram:lab", "allow"),
+        }
+
+
+def test_telegram_lab_init_rejects_malformed_bot_spec(capsys):
+    with tempfile.TemporaryDirectory() as td:
+        db_path = str(Path(td) / "relay.db")
+        with pytest.raises(SystemExit):
+            main(
+                [
+                    "init",
+                    "telegram-lab",
+                    "--db-path",
+                    db_path,
+                    "--bot",
+                    "bad-format",
+                ]
+            )
+        assert "BOT must look like identity=@BotUsername:ENV_VAR" in capsys.readouterr().err
+
+
+def test_telegram_lab_init_accepts_db_path_before_profile(capsys):
+    with tempfile.TemporaryDirectory() as td:
+        db_path = str(Path(td) / "relay.db")
+        main(
+            [
+                "init",
+                "--db-path",
+                db_path,
+                "telegram-lab",
+                "--bot",
+                "agent.alpha=@AlphaAgentBot:ALPHA_BOT_TOKEN",
+                "--bot",
+                "agent.beta=@BetaAgentBot:BETA_BOT_TOKEN",
+                "--json",
+            ]
+        )
+        assert json.loads(capsys.readouterr().out)["policies"] == 2
+
+        main(["telegram", "--db-path", db_path, "list-bots", "--json"])
+        bots = json.loads(capsys.readouterr().out)
+        assert [bot["identity_id"] for bot in bots] == ["agent.alpha", "agent.beta"]
+
+
 @pytest.mark.asyncio
 async def test_telegram_transport_sends_private_bot_to_bot_message(monkeypatch):
     with tempfile.TemporaryDirectory() as td:
@@ -240,6 +329,58 @@ async def test_telegram_group_update_normalizes_to_registered_room():
 
 
 @pytest.mark.asyncio
+async def test_telegram_update_rejects_unregistered_sender():
+    with tempfile.TemporaryDirectory() as td:
+        storage = Storage(str(Path(td) / "relay.db"))
+        await storage.init()
+        try:
+            with pytest.raises(ValueError, match="TELEGRAM_SENDER_NOT_REGISTERED"):
+                await TelegramTransport(storage, FakeTelegramClient()).normalize_update(
+                    "acme.alice",
+                    {
+                        "message": {
+                            "message_id": 9,
+                            "text": "let me in",
+                            "from": {"id": 999, "username": "UnknownBot"},
+                            "chat": {"id": 1234, "type": "private"},
+                        }
+                    },
+                )
+        finally:
+            await storage.close()
+
+
+@pytest.mark.asyncio
+async def test_telegram_group_update_rejects_unregistered_group():
+    with tempfile.TemporaryDirectory() as td:
+        storage = Storage(str(Path(td) / "relay.db"))
+        await storage.init()
+        try:
+            await storage.upsert_telegram_bot(
+                TelegramBotRegistration(
+                    identity_id="acme.bob",
+                    username="BobAgentBot",
+                    token_ref="env:BOB_BOT_TOKEN",
+                    bot_to_bot_enabled=True,
+                )
+            )
+            with pytest.raises(ValueError, match="TELEGRAM_GROUP_NOT_REGISTERED"):
+                await TelegramTransport(storage, FakeTelegramClient()).normalize_update(
+                    "acme.alice",
+                    {
+                        "message": {
+                            "message_id": 10,
+                            "text": "review this",
+                            "from": {"is_bot": True, "username": "BobAgentBot"},
+                            "chat": {"id": -100999, "type": "supergroup"},
+                        }
+                    },
+                )
+        finally:
+            await storage.close()
+
+
+@pytest.mark.asyncio
 async def test_telegram_runner_polls_registered_bots_into_relay_without_echo(monkeypatch):
     with tempfile.TemporaryDirectory() as td:
         relay = Relay(token="test-token", db_path=str(Path(td) / "relay.db"))
@@ -285,6 +426,60 @@ async def test_telegram_runner_polls_registered_bots_into_relay_without_echo(mon
             assert client.sent == []
         finally:
             await relay.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_telegram_runner_does_not_advance_offset_when_processing_fails(monkeypatch):
+    class FailingRelay:
+        def __init__(self, storage: Storage):
+            self.storage = storage
+
+        async def process(self, *_args, **_kwargs):
+            raise RuntimeError("storage unavailable")
+
+    with tempfile.TemporaryDirectory() as td:
+        storage = Storage(str(Path(td) / "relay.db"))
+        await storage.init()
+        try:
+            await storage.upsert_telegram_bot(
+                TelegramBotRegistration(
+                    identity_id="acme.alice",
+                    username="AliceAgentBot",
+                    token_ref="env:ALICE_BOT_TOKEN",
+                    bot_to_bot_enabled=True,
+                )
+            )
+            await storage.upsert_telegram_bot(
+                TelegramBotRegistration(
+                    identity_id="acme.bob",
+                    username="BobAgentBot",
+                    token_ref="env:BOB_BOT_TOKEN",
+                    bot_to_bot_enabled=True,
+                )
+            )
+            monkeypatch.setenv("ALICE_BOT_TOKEN", "alice-token")
+            client = FakeTelegramClient()
+            update = {
+                "update_id": 10,
+                "message": {
+                    "message_id": 7,
+                    "text": "status?",
+                    "from": {"is_bot": True, "username": "BobAgentBot"},
+                    "chat": {"id": 1234, "type": "private"},
+                },
+            }
+            runner = TelegramBotRunner(FailingRelay(storage), client)
+
+            with pytest.raises(RuntimeError, match="storage unavailable"):
+                await runner._handle_update(
+                    TelegramTransport(storage, client),
+                    "acme.alice",
+                    update,
+                )
+
+            assert runner._offsets == {}
+        finally:
+            await storage.close()
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,6 @@ import asyncio
 import json
 import logging
 import os
-from contextlib import suppress
 from typing import Protocol
 from urllib import parse, request
 
@@ -94,9 +93,12 @@ class TelegramTransport:
         chat = raw_message.get("chat") or {}
         chat_id = str(chat.get("id"))
         registered_group = await self.storage.get_telegram_group_by_chat_id(chat_id)
-        room = TELEGRAM_PRIVATE_ROOM if chat.get("type") == "private" else (
-            registered_group.room if registered_group else f"telegram:{chat_id}"
-        )
+        if chat.get("type") == "private":
+            room = TELEGRAM_PRIVATE_ROOM
+        elif registered_group is not None and registered_group.enabled:
+            room = registered_group.room
+        else:
+            raise ValueError("TELEGRAM_GROUP_NOT_REGISTERED")
         target = receiver_identity if room == TELEGRAM_PRIVATE_ROOM else None
         return Message(
             sender=sender,
@@ -111,11 +113,9 @@ class TelegramTransport:
         username = str(sender.get("username") or "").removeprefix("@")
         if username:
             registered = await self.storage.get_telegram_bot_by_username(username)
-            if registered is not None:
+            if registered is not None and registered.enabled:
                 return registered.identity_id
-            return f"telegram.{username}"
-        sender_id = sender.get("id", "unknown")
-        return f"telegram.{sender_id}"
+        raise ValueError("TELEGRAM_SENDER_NOT_REGISTERED")
 
     @staticmethod
     def _resolve_token(token_ref: str) -> str:
@@ -185,23 +185,31 @@ class TelegramBotRunner:
         self, transport: TelegramTransport, receiver_identity: str, update: dict
     ) -> None:
         update_id = update.get("update_id")
+        try:
+            msg = await transport.normalize_update(receiver_identity, update)
+        except (KeyError, TypeError, ValueError):
+            logger.warning("telegram update rejected", extra={"receiver_identity": receiver_identity})
+            self._advance_offset(receiver_identity, update_id)
+            return
+        if not msg.content:
+            self._advance_offset(receiver_identity, update_id)
+            return
+        await self.relay.process(
+            {
+                "type": msg.type.value if isinstance(msg.type, MessageType) else msg.type,
+                "content": msg.content,
+                "target": msg.target,
+                "thread": msg.thread,
+                "skip_transport_delivery": True,
+            },
+            msg.sender,
+            msg.room,
+        )
+        self._advance_offset(receiver_identity, update_id)
+
+    def _advance_offset(self, receiver_identity: str, update_id: object) -> None:
         if isinstance(update_id, int):
             self._offsets[receiver_identity] = max(
                 update_id + 1,
                 self._offsets.get(receiver_identity, 0),
-            )
-        with suppress(KeyError, TypeError, ValueError):
-            msg = await transport.normalize_update(receiver_identity, update)
-            if not msg.content:
-                return
-            await self.relay.process(
-                {
-                    "type": msg.type.value if isinstance(msg.type, MessageType) else msg.type,
-                    "content": msg.content,
-                    "target": msg.target,
-                    "thread": msg.thread,
-                    "skip_transport_delivery": True,
-                },
-                msg.sender,
-                msg.room,
             )
