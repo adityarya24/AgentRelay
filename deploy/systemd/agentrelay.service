@@ -1,0 +1,24 @@
+[Unit]
+Description=AgentRelay Multi-Agent Relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agentrelay
+Group=agentrelay
+WorkingDirectory=/var/lib/agentrelay
+EnvironmentFile=/etc/agentrelay/environment
+ExecStart=/usr/local/bin/agentrelay start
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/agentrelay
+
+[Install]
+WantedBy=multi-user.target
+

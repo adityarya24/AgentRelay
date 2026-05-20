@@ -10,6 +10,7 @@ AgentRelay defaults to a fast local-development setup. Use this guide when deplo
   - [Reverse Proxy](#reverse-proxy)
   - [Firewall](#firewall)
 - [Installation](#installation)
+- [Docker Compose](#docker-compose)
 - [Environment Variables](#environment-variables)
 - [systemd Service](#systemd-service)
 - [Log Rotation](#log-rotation)
@@ -109,6 +110,36 @@ sudo chown agentrelay:agentrelay /etc/agentrelay/token
 
 ---
 
+## Docker Compose
+
+The repository includes a production-shaped local compose example:
+
+- [Dockerfile](Dockerfile)
+- [docker-compose.yml](docker-compose.yml)
+
+Create a token file and start the service:
+
+```bash
+mkdir -p secrets
+python -c "import secrets; print(secrets.token_urlsafe(32))" > secrets/agentrelay_token
+docker compose up --build -d
+```
+
+The compose file binds AgentRelay to `127.0.0.1:8899`, stores SQLite data in a
+named Docker volume, and reads the relay token from a Docker secret backed by
+`./secrets/agentrelay_token`.
+
+Verify:
+
+```bash
+python -c "import json, urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:8899/', timeout=3)))"
+```
+
+For internet-facing use, keep this loopback binding and put Caddy or nginx in
+front of it for TLS.
+
+---
+
 ## Environment Variables
 
 | Variable | Example | Purpose |
@@ -129,7 +160,20 @@ Set these in the systemd service file (see below) or in `/etc/agentrelay/environ
 
 ## systemd Service
 
-Create `/etc/systemd/system/agentrelay.service`:
+Checked-in samples:
+
+- [deploy/systemd/agentrelay.service](deploy/systemd/agentrelay.service)
+- [deploy/systemd/agentrelay.env.example](deploy/systemd/agentrelay.env.example)
+
+Install them:
+
+```bash
+sudo install -m 0644 deploy/systemd/agentrelay.service /etc/systemd/system/agentrelay.service
+sudo install -m 0640 deploy/systemd/agentrelay.env.example /etc/agentrelay/environment
+sudo editor /etc/agentrelay/environment
+```
+
+The service is equivalent to:
 
 ```ini
 [Unit]

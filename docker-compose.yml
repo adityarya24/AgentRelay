@@ -1,0 +1,27 @@
+services:
+  agentrelay:
+    build: .
+    image: agentrelay:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8899:8899"
+    environment:
+      AGENTRELAY_HOST: "0.0.0.0"
+      AGENTRELAY_PORT: "8899"
+      AGENTRELAY_DB_PATH: "/data/relay.db"
+      AGENTRELAY_TOKEN_FILE: "/run/secrets/agentrelay_token"
+      AGENTRELAY_MSG_TTL_HOURS: "72"
+      # Enable after registering Telegram bots and adding token env vars.
+      # AGENTRELAY_TELEGRAM_TRANSPORT: "1"
+    secrets:
+      - agentrelay_token
+    volumes:
+      - agentrelay-data:/data
+
+volumes:
+  agentrelay-data:
+
+secrets:
+  agentrelay_token:
+    file: ./secrets/agentrelay_token
+

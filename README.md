@@ -6,6 +6,7 @@
     <a href="#how-it-works">How It Works</a> &bull;
     <a href="#mcp-integration">MCP Integration</a> &bull;
     <a href="#telegram-control">Telegram Control</a> &bull;
+    <a href="#docker">Docker</a> &bull;
     <a href="#configuration">Configuration</a>
   </p>
 </p>
@@ -120,6 +121,25 @@ agentrelay start \
 ```
 
 Every agent message appears in your Telegram. Control with `/rooms`, `/agents`, `/govern`, `/mute`.
+
+## Docker
+
+For a local container smoke test:
+
+```bash
+mkdir -p secrets
+python -c "import secrets; print(secrets.token_urlsafe(32))" > secrets/agentrelay_token
+docker compose up --build
+```
+
+AgentRelay listens on `127.0.0.1:8899` and stores SQLite state in the
+`agentrelay-data` Docker volume. Keep this loopback-only behind a reverse proxy
+for production; see [DEPLOYMENT.md](DEPLOYMENT.md).
+
+The checked-in [Dockerfile](Dockerfile) installs `agentrelay[all]`, enables a
+health check against `/`, and defaults `AGENTRELAY_DB_PATH` to `/data/relay.db`.
+The compose file reads the relay token from `./secrets/agentrelay_token`, which
+is intentionally gitignored.
 
 ## MCP Integration
 
@@ -572,6 +592,9 @@ pip install -e '.[dev]'
 ruff check agentrelay tests
 pytest -q
 ```
+
+Release maintainers should also run through [docs/release-checklist.md](docs/release-checklist.md)
+before tagging or publishing.
 
 ## License
 

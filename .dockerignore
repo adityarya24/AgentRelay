@@ -1,0 +1,17 @@
+.agent-bridge/
+.clawpatch/
+.git/
+.github/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+*.db
+*.db-shm
+*.db-wal
+*.egg-info/
+__pycache__/
+secrets/
+clawpatch-report.md

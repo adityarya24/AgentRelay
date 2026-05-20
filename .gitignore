@@ -9,6 +9,7 @@ build/
 .venv/
 venv/
 .env
+secrets/
 *.db
 *.db-wal
 *.db-shm
@@ -16,3 +17,5 @@ venv/
 .ruff_cache/
 .mypy_cache/
 .agent-bridge/
+.clawpatch/
+clawpatch-report.md
