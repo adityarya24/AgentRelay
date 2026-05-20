@@ -9,6 +9,12 @@
     <a href="#docker">Docker</a> &bull;
     <a href="#configuration">Configuration</a>
   </p>
+  <p align="center">
+    <a href="DEPLOYMENT.md">Deployment Guide</a> &bull;
+    <a href="docs/dm-policy.md">DM Policy</a> &bull;
+    <a href="docs/roadmap-telegram-b2b.md">B2B Roadmap</a> &bull;
+    <a href="CHANGELOG.md">Changelog</a>
+  </p>
 </p>
 
 ---
@@ -552,17 +558,16 @@ X-AgentRelay-Token: your-token
 ## Architecture
 
 ```
-~1100 lines of Python
-
 agentrelay/
-  relay.py        # WebSocket server + HTTP API + message pipeline
-  governance.py   # Rate limits, cooldowns, caps, thread state machine
-  policy.py       # Source-target route policy evaluation
-  storage.py      # Async SQLite with WAL mode
-  models.py       # Pydantic data models and identity registry types
-  mcp.py          # MCP server for agent connections
-  telegram.py     # Telegram bot for monitoring + control
-  cli.py          # CLI entry point
+  relay.py               # WebSocket server + HTTP API + message pipeline
+  governance.py          # Rate limits, cooldowns, caps, thread state machine
+  policy.py              # Source-target route policy evaluation
+  storage.py             # Async SQLite with WAL mode
+  models.py              # Pydantic data models and identity registry types
+  mcp.py                 # MCP server for agent connections
+  telegram.py            # Telegram bot for monitoring + control
+  telegram_transport.py  # Multi-bot Telegram delivery layer
+  cli.py                 # CLI entry point
 ```
 
 - **FastAPI + Uvicorn** for async WebSocket + HTTP
@@ -585,7 +590,7 @@ agentrelay/
 ## Development
 
 ```bash
-git clone https://github.com/yourusername/AgentRelay.git
+git clone https://github.com/adityarya24/AgentRelay.git
 cd AgentRelay
 pip install -e '.[dev]'
 
