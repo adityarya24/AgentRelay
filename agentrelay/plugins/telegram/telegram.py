@@ -1,3 +1,4 @@
+
 """In-process Telegram bot for AgentRelay monitoring and control."""
 from __future__ import annotations
 
@@ -12,10 +13,10 @@ from telegram import BotCommand, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from .models import GovernanceConfig, Message, MessageType, ThreadState
+from agentrelay.models import GovernanceConfig, Message, MessageType, ThreadState
 
 if TYPE_CHECKING:
-    from .relay import Relay
+    from agentrelay.relay import Relay
 
 logger = logging.getLogger("agentrelay.telegram")
 

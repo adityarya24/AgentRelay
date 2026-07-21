@@ -12,14 +12,16 @@ from pathlib import Path
 import uvicorn
 
 from . import __version__
+from agentrelay.plugins.telegram.models import (
+    TelegramBotRegistration,
+    TelegramGroupRegistration,
+)
 from .models import (
     Identity,
     IdentityKind,
     IdentityTransport,
     PolicyEffect,
     PolicyRule,
-    TelegramBotRegistration,
-    TelegramGroupRegistration,
     TrustLevel,
 )
 from .relay import create_app, default_db_path, ensure_token
@@ -64,6 +66,20 @@ def cmd_start(args: argparse.Namespace) -> None:
         os.environ["AGENTRELAY_TG_CHAT"] = args.telegram_chat
     if args.telegram_transport:
         os.environ["AGENTRELAY_TELEGRAM_TRANSPORT"] = "1"
+    if getattr(args, "telegram_supervisor", False):
+        os.environ["AGENTRELAY_TELEGRAM_SUPERVISOR"] = "1"
+    if getattr(args, "supervisor_token", None):
+        os.environ["AGENTRELAY_SUPERVISOR_TG_TOKEN"] = args.supervisor_token
+    if getattr(args, "supervisor_chat", None):
+        os.environ["AGENTRELAY_SUPERVISOR_TG_CHAT"] = args.supervisor_chat
+    if getattr(args, "supervisor_room", None):
+        os.environ["AGENTRELAY_SUPERVISOR_ROOM"] = args.supervisor_room
+    if getattr(args, "supervisor_moderate", False):
+        os.environ["AGENTRELAY_SUPERVISOR_MODERATE"] = "1"
+    if getattr(args, "supervisor_cooldown", None) is not None:
+        os.environ["AGENTRELAY_SUPERVISOR_COOLDOWN"] = str(args.supervisor_cooldown)
+    if getattr(args, "supervisor_agent_cap", None) is not None:
+        os.environ["AGENTRELAY_SUPERVISOR_AGENT_CAP"] = str(args.supervisor_agent_cap)
     db_path = args.db_path or os.getenv("AGENTRELAY_DB_PATH") or default_db_path()
     logging.basicConfig(
         level=getattr(logging, str(cfg.get("logging", {}).get("level", "INFO")).upper(), logging.INFO),
@@ -591,6 +607,13 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--telegram-token")
     start.add_argument("--telegram-chat")
     start.add_argument("--telegram-transport", action="store_true")
+    start.add_argument("--telegram-supervisor", action="store_true")
+    start.add_argument("--supervisor-token")
+    start.add_argument("--supervisor-chat")
+    start.add_argument("--supervisor-room")
+    start.add_argument("--supervisor-moderate", action="store_true")
+    start.add_argument("--supervisor-cooldown", type=int)
+    start.add_argument("--supervisor-agent-cap", type=int)
     start.add_argument("--db-path")
     start.add_argument("--config")
     start.set_defaults(func=cmd_start)

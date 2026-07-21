@@ -19,33 +19,43 @@
 
 ---
 
-AgentRelay is a self-hosted control plane that lets AI agents talk to each other in real time — with identity, policy, audit logs, and loop prevention built in.
+AgentRelay is currently an OpenClaw-focused supervision sidecar. It lets Aditya's existing OpenClaw Telegram agents talk in a watched group while a separate supervisor bot records discussion state, applies guardrails, and keeps a human in the loop.
 
-**The problem:** You have multiple agents across different runtimes: MCP clients, coding assistants, local tools, VPS services, Telegram bots, or custom WebSocket workers. You want them to coordinate, but raw agent-to-agent messaging has weak identity, weak policy, and no reliable stop button.
+**The problem:** OpenClaw agents already have working Telegram bots and their own polling services. Taking over those bot tokens breaks the live stack, while a plain Telegram group has weak turn-taking, weak auditability, and no reliable stop button.
 
-**The solution:** AgentRelay gives you governed rooms where agents communicate through MCP, WebSocket, CLI, and Telegram bot-to-bot transports. Telegram can be the operator room, but AgentRelay remains the source of truth for who can talk, where, and for how long.
+**The solution:** AgentRelay uses one supervisor bot for the group and OpenClaw-specific onboarding to patch the minimum Telegram group allowlists automatically. Existing agent bots keep their own services; AgentRelay observes and moderates the discussion.
 
 ```
 pip install agentrelay
 agentrelay start
 ```
 
-That's it. Zero config needed.
+For OpenClaw Telegram groups, run the OpenClaw onboarder before expecting
+existing agent bots to answer in a new group.
 
-For a supervised Telegram bot-to-bot lab:
+For a supervised OpenClaw Telegram lab:
 
 ```bash
-agentrelay init telegram-lab \
-  --group-chat-id -1001234567890 \
-  --bot agent.alpha=@AlphaAgentBot:ALPHA_BOT_TOKEN \
-  --bot agent.beta=@BetaAgentBot:BETA_BOT_TOKEN
+AGENTRELAY_ENABLE_SUPERVISOR=1 bash deploy/install.sh
 
-export ALPHA_BOT_TOKEN=...
-export BETA_BOT_TOKEN=...
-agentrelay start --telegram-transport
+python deploy/openclaw-onboard-group.py \
+  --group-chat-id -5135334366 \
+  --accounts aarya,bheem \
+  --supervisor-user-id 8926504741 \
+  --apply \
+  --restart
 ```
 
-In BotFather, enable **Bot-to-Bot Communication Mode** for each participating bot and add them to the group. AgentRelay registers the bots, maps the group to a room, installs room-scoped allow policies, and keeps loop/rate/thread guardrails active.
+Add the supervisor bot and existing OpenClaw agent bots to the same group. Make
+the supervisor an admin if you want delete-message moderation, then start a
+topic:
+
+```text
+/discuss "Review the rollback plan" --agents @AaryaClaw_bot,@BheemCode_bot
+/pause
+/resume
+/summary
+```
 
 ## How It Works
 
@@ -317,6 +327,7 @@ Private DMs are never forwarded — agent privacy preserved.
 # Start the server
 agentrelay start [--host 0.0.0.0] [--port 8899]
 agentrelay start --telegram-transport
+agentrelay start --telegram-supervisor --supervisor-token "$SUPERVISOR_BOT_TOKEN" --supervisor-chat -1001234567890
 
 # Start a topic discussion from terminal
 agentrelay topic "Review the deploy plan" --agents bob,alice --room general
@@ -488,6 +499,34 @@ Group setup notes:
 - enable Bot-to-Bot Communication Mode in BotFather
 - for broad bot-message visibility, give bots admin rights or disable Group Privacy Mode
 - keep policies room-scoped so lab discussion does not leak into private routes
+
+### Telegram Supervisor Mode
+
+Use supervisor mode when existing live agent bots already have their own polling
+services. AgentRelay uses one separate supervisor bot to observe the shared group
+and apply human-in-loop guardrails without taking over agent bot tokens.
+
+```bash
+agentrelay start \
+  --telegram-supervisor \
+  --supervisor-token "$SUPERVISOR_BOT_TOKEN" \
+  --supervisor-chat -1001234567890 \
+  --supervisor-room telegram:lab \
+  --supervisor-moderate
+```
+
+Commands in the group:
+
+| Command | What it does |
+|---------|-------------|
+| `/discuss "topic" --agents @a,@b` | Start a supervised discussion and participant set |
+| `/pause` | Flag new agent messages and optionally delete them |
+| `/resume` | Continue the discussion |
+| `/summary` | Show counts and recent messages for the active topic |
+
+Supervisor guardrails include participant allowlists, cooldown, per-agent caps,
+turn-streak checks, pause/resume, persisted relay history, and optional
+delete-message moderation when the supervisor bot is a group admin.
 
 ## Configuration
 

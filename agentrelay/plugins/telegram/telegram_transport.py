@@ -8,9 +8,10 @@ import os
 from typing import Protocol
 from urllib import parse, request
 
-from .models import Message, MessageType
-from .policy import PolicyEngine
-from .storage import Storage
+from agentrelay.models import Message, MessageType
+from agentrelay.policy import PolicyEngine
+from agentrelay.storage import Storage
+from .models import TelegramBotRegistration, TelegramGroupRegistration
 
 TELEGRAM_PRIVATE_ROOM = "telegram:private"
 logger = logging.getLogger("agentrelay.telegram_transport")
@@ -20,6 +21,12 @@ class TelegramClient(Protocol):
     async def send_message(self, token: str, chat_id: str, text: str) -> dict:
         ...
 
+    async def set_my_commands(self, token: str, commands: list[dict[str, str]]) -> dict:
+        ...
+
+    async def delete_message(self, token: str, chat_id: str, message_id: int) -> dict:
+        ...
+
     async def get_updates(self, token: str, offset: int | None = None, timeout: int = 30) -> list[dict]:
         ...
 
@@ -27,6 +34,12 @@ class TelegramClient(Protocol):
 class TelegramHTTPClient:
     async def send_message(self, token: str, chat_id: str, text: str) -> dict:
         return await self._post(token, "sendMessage", {"chat_id": chat_id, "text": text})
+
+    async def set_my_commands(self, token: str, commands: list[dict[str, str]]) -> dict:
+        return await self._post(token, "setMyCommands", {"commands": json.dumps(commands)})
+
+    async def delete_message(self, token: str, chat_id: str, message_id: int) -> dict:
+        return await self._post(token, "deleteMessage", {"chat_id": chat_id, "message_id": message_id})
 
     async def get_updates(self, token: str, offset: int | None = None, timeout: int = 30) -> list[dict]:
         payload: dict[str, object] = {"timeout": timeout}

@@ -10,7 +10,7 @@ import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, TYPE_CHECKING
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -20,7 +20,9 @@ from .governance import GovernanceEngine
 from .models import Agent, GovernanceConfig, Message, MessageType, Room, ThreadState
 from .policy import PolicyEngine
 from .storage import Storage
-from .telegram_transport import TelegramClient, TelegramTransport
+
+if TYPE_CHECKING:
+    from agentrelay.plugins.telegram.telegram_transport import TelegramClient
 
 TokenHook = Callable[[Message], Awaitable[None]]
 logger = logging.getLogger("agentrelay.relay")
@@ -102,17 +104,22 @@ class Relay:
         tg_token = os.getenv("AGENTRELAY_TG_TOKEN")
         tg_chat = os.getenv("AGENTRELAY_TG_CHAT")
         if tg_token and tg_chat:
-            from .telegram import TelegramBot
+            from agentrelay.plugins.telegram.telegram import TelegramBot
 
             tg_bot = TelegramBot(self, tg_token, tg_chat)
             self.set_telegram_hook(tg_bot.forward)
             self._tasks.append(asyncio.create_task(tg_bot.run()))
         if os.getenv("AGENTRELAY_TELEGRAM_TRANSPORT", "").lower() in {"1", "true", "yes"}:
-            from .telegram_transport import TelegramBotRunner, TelegramHTTPClient
+            from agentrelay.plugins.telegram.telegram_transport import TelegramBotRunner, TelegramHTTPClient
 
             client = self._telegram_transport_client or TelegramHTTPClient()
             self.set_telegram_transport_client(client)
             self._tasks.append(asyncio.create_task(TelegramBotRunner(self, client).run()))
+        if os.getenv("AGENTRELAY_TELEGRAM_SUPERVISOR", "").lower() in {"1", "true", "yes"}:
+            from agentrelay.plugins.telegram.telegram_supervisor import supervisor_from_env
+
+            supervisor = supervisor_from_env(self, self._telegram_transport_client)
+            self._tasks.append(asyncio.create_task(supervisor.run()))
 
     async def shutdown(self) -> None:
         await self.storage.store_governance(self.governance.export_state())
@@ -285,6 +292,8 @@ class Relay:
             return 0
         if await self.storage.get_telegram_bot(target) is None:
             return 0
+        from agentrelay.plugins.telegram.telegram_transport import TelegramTransport
+
         result = await TelegramTransport(self.storage, self._telegram_transport_client).send_private(
             msg.sender,
             target,
@@ -306,6 +315,8 @@ class Relay:
             return 0
         if await self.storage.get_telegram_group(room) is None:
             return 0
+        from agentrelay.plugins.telegram.telegram_transport import TelegramTransport
+
         result = await TelegramTransport(self.storage, self._telegram_transport_client).send_group(
             msg.sender,
             room,
