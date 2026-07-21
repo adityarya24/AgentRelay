@@ -27,6 +27,26 @@ class MessageType(str, Enum):
     CLOSE = "close"
 
 
+class EventType(str, Enum):
+    TASK_CREATED = "task.created"
+    JOB_STARTED = "job.started"
+    JOB_COMPLETED = "job.completed"
+    JOB_FAILED = "job.failed"
+    FOCUS_CHANGED = "focus.changed"
+    MEMORY_UPDATED = "memory.updated"
+    CONFLICT_DETECTED = "conflict.detected"
+
+
+class Event(BaseModel):
+    id: str = Field(default_factory=make_id)
+    event_type: EventType
+    producer: str
+    payload: dict = Field(default_factory=dict)
+    correlation_id: str | None = None
+    ts: float = Field(default_factory=utc_timestamp)
+    seq: int | None = None
+
+
 class ThreadState(str, Enum):
     OPEN = "open"
     ACTIVE = "active"
@@ -121,27 +141,6 @@ class PolicyDecision(BaseModel):
     allowed: bool
     reason: str
     rule_id: str | None = None
-
-
-class TelegramBotRegistration(BaseModel):
-    identity_id: str
-    username: str
-    token_ref: str
-    bot_to_bot_enabled: bool = False
-    enabled: bool = True
-    verified_at: float | None = None
-    last_error: str | None = None
-    created_at: float = Field(default_factory=utc_timestamp)
-    updated_at: float = Field(default_factory=utc_timestamp)
-
-
-class TelegramGroupRegistration(BaseModel):
-    room: str
-    chat_id: str
-    title: str | None = None
-    enabled: bool = True
-    created_at: float = Field(default_factory=utc_timestamp)
-    updated_at: float = Field(default_factory=utc_timestamp)
 
 
 class GovernanceConfig(BaseModel):

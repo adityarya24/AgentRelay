@@ -10,7 +10,7 @@ import pytest
 
 from agentrelay.models import GovernanceConfig, Message, MessageType
 from agentrelay.relay import Relay
-from agentrelay.telegram import TelegramBot
+from agentrelay.plugins.telegram.telegram import TelegramBot
 
 
 class FakeMessage:
@@ -134,7 +134,7 @@ def test_relay_starts_telegram_task_when_env_configured(monkeypatch: pytest.Monk
 
     monkeypatch.setenv("AGENTRELAY_TG_TOKEN", "123456:ABCDEF")
     monkeypatch.setenv("AGENTRELAY_TG_CHAT", "123")
-    monkeypatch.setattr("agentrelay.telegram.TelegramBot", FakeTelegramBot)
+    monkeypatch.setattr("agentrelay.plugins.telegram.telegram.TelegramBot", FakeTelegramBot)
 
     async def exercise():
         await relay.startup()

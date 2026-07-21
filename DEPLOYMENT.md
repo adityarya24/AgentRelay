@@ -1,6 +1,6 @@
 # AgentRelay Production Deployment Guide
 
-AgentRelay defaults to a fast local-development setup. Use this guide when deploying to a VPS, cloud instance, or any production environment.
+AgentRelay is currently deployed as an OpenClaw-focused VPS sidecar. Use this guide for Aditya's OpenClaw stack first; generic public deployment can be revisited after the OpenClaw workflow is stable.
 
 ## Table of Contents
 
@@ -224,6 +224,71 @@ View logs:
 ```bash
 sudo journalctl -u agentrelay -f
 ```
+
+## One-Command Sidecar Install
+
+For a user-level sidecar on a VPS, the repository includes
+[deploy/install.sh](deploy/install.sh). It updates the source checkout, creates a
+local venv, writes a loopback-only user systemd service, and verifies `/`.
+
+```bash
+bash deploy/install.sh
+```
+
+To enable Telegram supervisor mode during install:
+
+```bash
+AGENTRELAY_ENABLE_SUPERVISOR=1 bash deploy/install.sh
+```
+
+The installer prompts for the supervisor bot token and group chat ID unless
+`AGENTRELAY_SUPERVISOR_TG_TOKEN` and `AGENTRELAY_SUPERVISOR_TG_CHAT` are already
+set. Existing live agent bots keep their own services and tokens; only the
+supervisor bot token is used by AgentRelay.
+
+---
+
+## OpenClaw Group Onboarding
+
+Existing OpenClaw Telegram agents ignore new groups until the group is present
+in `openclaw.json`. Do not hand-edit that config for AgentRelay labs. Use the
+OpenClaw onboarder:
+
+```bash
+python deploy/openclaw-onboard-group.py \
+  --group-chat-id -5135334366 \
+  --accounts aarya,bheem \
+  --supervisor-user-id 8926504741
+```
+
+The default is a dry run. If the planned changes are only the expected group and
+allowlist entries, apply them and restart the gateway:
+
+```bash
+python deploy/openclaw-onboard-group.py \
+  --group-chat-id -5135334366 \
+  --accounts aarya,bheem \
+  --supervisor-user-id 8926504741 \
+  --apply \
+  --restart
+```
+
+The script writes a timestamped backup next to `openclaw.json` before applying.
+This is the first plug-in point for AgentRelay: host-specific adapters should
+patch the minimum safe config automatically, with dry-run output and rollback
+breadcrumbs.
+
+## Live Test Notes
+
+The first VPS lab exposed three required behaviors:
+
+- The user systemd service must load the AgentRelay environment file; otherwise
+  the HTTP server starts but supervisor mode never starts.
+- Telegram permits only one active `getUpdates` consumer per bot token; manual
+  debugging polls can cause HTTP 409 conflicts while the service is polling.
+- OpenClaw agents do not join arbitrary new groups automatically. The new group
+  must be registered under the global Telegram config and each selected account
+  before Aarya/Bheem see group messages.
 
 ---
 

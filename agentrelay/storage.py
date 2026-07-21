@@ -9,13 +9,15 @@ from typing import Any
 
 import aiosqlite
 
+from agentrelay.plugins.telegram.models import (
+    TelegramBotRegistration,
+    TelegramGroupRegistration,
+)
 from .models import (
     Identity,
     Message,
     MessageType,
     PolicyRule,
-    TelegramBotRegistration,
-    TelegramGroupRegistration,
     ThreadState,
     utc_timestamp,
 )

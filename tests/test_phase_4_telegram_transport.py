@@ -12,12 +12,15 @@ from agentrelay.cli import main
 from agentrelay.models import (
     PolicyEffect,
     PolicyRule,
+)
+from agentrelay.plugins.telegram.models import (
     TelegramBotRegistration,
     TelegramGroupRegistration,
 )
+from agentrelay.plugins.telegram.telegram_supervisor import TelegramSupervisorRunner
+from agentrelay.plugins.telegram.telegram_transport import TelegramBotRunner, TelegramTransport
 from agentrelay.relay import Relay
 from agentrelay.storage import Storage
-from agentrelay.telegram_transport import TelegramBotRunner, TelegramTransport
 
 
 class FakeTelegramClient:
@@ -29,6 +32,14 @@ class FakeTelegramClient:
     async def send_message(self, token: str, chat_id: str, text: str) -> dict:
         self.sent.append((token, chat_id, text))
         return {"ok": True, "result": {"message_id": 42}}
+
+    async def set_my_commands(self, token: str, commands: list[dict[str, str]]) -> dict:
+        self.sent.append((token, "commands", ",".join(command["command"] for command in commands)))
+        return {"ok": True, "result": True}
+
+    async def delete_message(self, token: str, chat_id: str, message_id: int) -> dict:
+        self.sent.append((token, chat_id, f"delete:{message_id}"))
+        return {"ok": True, "result": True}
 
     async def get_updates(self, token: str, offset: int | None = None, timeout: int = 30) -> list[dict]:
         self.update_calls.append((token, offset))
@@ -284,6 +295,98 @@ async def test_telegram_transport_blocks_policy_before_delivery(monkeypatch):
             assert client.sent == []
         finally:
             await storage.close()
+
+
+@pytest.mark.asyncio
+async def test_telegram_supervisor_discuss_and_records_group_messages():
+    with tempfile.TemporaryDirectory() as td:
+        relay = Relay(token="test-token", db_path=str(Path(td) / "relay.db"))
+        await relay.startup()
+        try:
+            client = FakeTelegramClient()
+            runner = TelegramSupervisorRunner(
+                relay,
+                token="supervisor-token",
+                chat_id="-100123",
+                room="telegram:lab",
+                client=client,
+                cooldown_seconds=0,
+            )
+            client.updates = [
+                {
+                    "update_id": 1,
+                    "message": {
+                        "message_id": 10,
+                        "chat": {"id": -100123, "type": "supergroup"},
+                        "from": {"id": 1, "username": "Aditya"},
+                        "text": '/discuss "ship plan" --agents @AaryaBot,@BheeshmBot',
+                    },
+                },
+                {
+                    "update_id": 2,
+                    "message": {
+                        "message_id": 11,
+                        "chat": {"id": -100123, "type": "supergroup"},
+                        "from": {"id": 2, "username": "AaryaBot", "is_bot": True},
+                        "text": "I will coordinate.",
+                    },
+                },
+            ]
+
+            await runner.poll_once()
+
+            history = await relay.storage.fetch_history("telegram:lab", 10)
+            assert [msg.sender for msg in history] == ["telegram.Aditya", "telegram.AaryaBot"]
+            assert history[0].content == "ship plan"
+            assert history[1].thread == "ship plan"
+            assert client.sent[-1][2].startswith("Discussion started:")
+        finally:
+            await relay.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_telegram_supervisor_paused_moderation_deletes_message():
+    with tempfile.TemporaryDirectory() as td:
+        relay = Relay(token="test-token", db_path=str(Path(td) / "relay.db"))
+        await relay.startup()
+        try:
+            client = FakeTelegramClient()
+            runner = TelegramSupervisorRunner(
+                relay,
+                token="supervisor-token",
+                chat_id="-100123",
+                room="telegram:lab",
+                client=client,
+                moderate=True,
+            )
+            client.updates = [
+                {
+                    "update_id": 1,
+                    "message": {
+                        "message_id": 10,
+                        "chat": {"id": -100123, "type": "supergroup"},
+                        "from": {"id": 1, "username": "Aditya"},
+                        "text": "/pause",
+                    },
+                },
+                {
+                    "update_id": 2,
+                    "message": {
+                        "message_id": 11,
+                        "chat": {"id": -100123, "type": "supergroup"},
+                        "from": {"id": 2, "username": "KarnaBot", "is_bot": True},
+                        "text": "Continuing anyway.",
+                    },
+                },
+            ]
+
+            await runner.poll_once()
+
+            history = await relay.storage.fetch_history("telegram:lab", 10)
+            assert history[-1].content.startswith("supervisor_block: paused")
+            assert ("supervisor-token", "-100123", "delete:11") in client.sent
+        finally:
+            await relay.shutdown()
 
 
 @pytest.mark.asyncio
