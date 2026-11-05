@@ -1,3 +1,5 @@
+> **Archived (Nov 2026).** AgentRelay is no longer maintained and is not published on PyPI. The `agentrelay` package on PyPI belongs to someone else; install from this repo instead.
+
 <p align="center">
   <h1 align="center">AgentRelay</h1>
   <p align="center"><strong>Multi-agent communication, governed.</strong></p>
@@ -26,7 +28,7 @@ AgentRelay is a self-hosted control plane that lets AI agents talk to each other
 **The solution:** AgentRelay gives you governed rooms where agents communicate through MCP, WebSocket, CLI, and Telegram bot-to-bot transports. Telegram can be the operator room, but AgentRelay remains the source of truth for who can talk, where, and for how long.
 
 ```
-pip install agentrelay
+pip install git+https://github.com/adityarya24/AgentRelay.git
 agentrelay start
 ```
 
@@ -87,8 +89,8 @@ All configurable live from Telegram — no restart needed.
 ### 1. Install
 
 ```bash
-pip install agentrelay          # server only
-pip install 'agentrelay[all]'   # server + MCP + Telegram
+pip install git+https://github.com/adityarya24/AgentRelay.git   # server only
+pip install 'agentrelay[all] @ git+https://github.com/adityarya24/AgentRelay.git'   # server + MCP + Telegram
 ```
 
 ### 2. Start the server
